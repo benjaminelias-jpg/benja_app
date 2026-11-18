@@ -142,8 +142,13 @@ export const automationTriggerEnum = pgEnum('automation_trigger', [
 
 export const automationStepEnum = pgEnum('automation_step_type', [
   'send_dm',
+  'send_image',
   'reply_comment',
   'send_resource',
+  /** Manda una pregunta y espera la respuesta del lead para seguir. */
+  'ask_question',
+  /** Bifurca el flujo segun una condicion sobre el lead o su ultima respuesta. */
+  'condition',
   'add_tag',
   'remove_tag',
   'set_stage',
@@ -159,6 +164,8 @@ export const automationStepEnum = pgEnum('automation_step_type', [
 export const runStatusEnum = pgEnum('run_status', [
   'pending',
   'running',
+  /** El flujo llego a un paso `ask_question` y espera la respuesta del lead. */
+  'waiting',
   'completed',
   'failed',
   'skipped',
@@ -185,6 +192,23 @@ export const deliveryStatusEnum = pgEnum('delivery_status', [
 ]);
 
 export const matchTypeEnum = pgEnum('match_type', ['exact', 'contains', 'starts_with', 'regex']);
+
+/** Como se conecto la cuenta de Instagram. Meta tiene dos caminos distintos. */
+export const connectionMethodEnum = pgEnum('connection_method', [
+  'instagram_login',
+  'unified_login',
+  'manual',
+]);
+
+export const conversationStatusEnum = pgEnum('conversation_status', ['open', 'snoozed', 'closed']);
+
+export const messageStatusEnum = pgEnum('message_status', [
+  'pending',
+  'sent',
+  'delivered',
+  'read',
+  'failed',
+]);
 
 export const touchTypeEnum = pgEnum('touch_type', ['first', 'assist', 'last']);
 
@@ -242,7 +266,16 @@ export const instagramAccounts = pgTable(
     /** Token que Meta envia en el handshake GET del webhook. */
     webhookVerifyToken: text('webhook_verify_token'),
     connected: boolean('connected').notNull().default(false),
+    connectionMethod: connectionMethodEnum('connection_method').notNull().default('manual'),
+    /** Permisos concedidos realmente, tal como los devuelve Meta. */
+    scopes: text('scopes').array().notNull().default(sql`ARRAY[]::text[]`),
+    accountType: text('account_type'),
+    followsCount: integer('follows_count').notNull().default(0),
+    mediaCount: integer('media_count').notNull().default(0),
     lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
+    /** Ultima vez que se bajaron conversaciones de la Graph API. */
+    lastInboxSyncAt: timestamp('last_inbox_sync_at', { withTimezone: true }),
+    lastError: text('last_error'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex('ig_accounts_user_idx').on(t.orgId, t.igUserId)],
@@ -469,8 +502,22 @@ export const automationSteps = pgTable(
     position: integer('position').notNull().default(0),
     type: automationStepEnum('type').notNull(),
     config: jsonb('config').$type<Record<string, unknown>>().notNull().default({}),
+    /**
+     * Identificador estable del nodo dentro del flujo. El motor recorre el
+     * grafo por `nodeId` -> `nextNodeId`, no por `position`: eso es lo que
+     * permite bifurcar en vez de ejecutar una lista lineal.
+     */
+    nodeId: text('node_id'),
+    nextNodeId: text('next_node_id'),
+    /** Salidas condicionales: [{ when: {...}, goTo: '<nodeId>' }]. */
+    branches: jsonb('branches').$type<unknown[]>().notNull().default([]),
+    canvasX: integer('canvas_x').notNull().default(0),
+    canvasY: integer('canvas_y').notNull().default(0),
   },
-  (t) => [index('steps_automation_idx').on(t.automationId, t.position)],
+  (t) => [
+    index('steps_automation_idx').on(t.automationId, t.position),
+    uniqueIndex('steps_node_idx').on(t.automationId, t.nodeId),
+  ],
 );
 
 /**
@@ -539,10 +586,16 @@ export const messages = pgTable(
       .notNull()
       .references(() => leads.id, { onDelete: 'cascade' }),
     contentId: text('content_id').references(() => contents.id, { onDelete: 'set null' }),
+    conversationId: text('conversation_id'),
     direction: messageDirectionEnum('direction').notNull(),
     channel: channelEnum('channel').notNull().default('ig_dm'),
     body: text('body'),
     mediaUrl: text('media_url'),
+    attachments: jsonb('attachments').$type<unknown[]>().notNull().default([]),
+    /** mid del mensaje al que responde, si es una respuesta. */
+    replyToMid: text('reply_to_mid'),
+    status: messageStatusEnum('status').notNull().default('sent'),
+    error: text('error'),
     /** Si lo envio una automatizacion y no una persona. */
     automatedBy: text('automated_by').references(() => automations.id, { onDelete: 'set null' }),
     externalId: text('external_id'),
@@ -550,9 +603,97 @@ export const messages = pgTable(
   },
   (t) => [
     index('messages_lead_idx').on(t.leadId, t.sentAt),
+    index('messages_conversation_idx').on(t.conversationId, t.sentAt),
     uniqueIndex('messages_external_idx').on(t.orgId, t.externalId),
   ],
 );
+
+/**
+ * Hilo de conversacion de Instagram.
+ *
+ * Existe aparte de `messages` porque la bandeja necesita ordenar y contar sin
+ * recorrer todos los mensajes, y porque la ventana de 24 horas depende de
+ * cuando escribio el lead por ultima vez: ese dato vive en el hilo.
+ */
+export const conversations = pgTable(
+  'conversations',
+  {
+    id: text('id').primaryKey().$defaultFn(() => newId('cnv')),
+    orgId: text('org_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    leadId: text('lead_id')
+      .notNull()
+      .references(() => leads.id, { onDelete: 'cascade' }),
+    igAccountId: text('ig_account_id').references(() => instagramAccounts.id, {
+      onDelete: 'set null',
+    }),
+    /** Id del hilo en Instagram (t_...). Permite sincronizar con la Graph API. */
+    igThreadId: text('ig_thread_id'),
+    status: conversationStatusEnum('status').notNull().default('open'),
+    assignedTo: text('assigned_to').references(() => users.id, { onDelete: 'set null' }),
+    unreadCount: integer('unread_count').notNull().default(0),
+    lastMessagePreview: text('last_message_preview'),
+    lastMessageAt: timestamp('last_message_at', { withTimezone: true }),
+    /** Ultimo mensaje ENTRANTE: de aqui sale la ventana de 24 h para responder. */
+    lastInboundAt: timestamp('last_inbound_at', { withTimezone: true }),
+    lastOutboundAt: timestamp('last_outbound_at', { withTimezone: true }),
+    snoozedUntil: timestamp('snoozed_until', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('conversations_lead_idx').on(t.orgId, t.leadId),
+    uniqueIndex('conversations_thread_idx').on(t.orgId, t.igThreadId),
+    index('conversations_recent_idx').on(t.orgId, t.lastMessageAt),
+  ],
+);
+
+/**
+ * Flujo en pausa esperando la respuesta del lead.
+ *
+ * Es lo que convierte una lista de pasos en una conversacion de verdad: el paso
+ * `ask_question` crea una espera, y el proximo DM del lead la resuelve y retoma
+ * el flujo desde el nodo siguiente.
+ */
+export const automationWaits = pgTable(
+  'automation_waits',
+  {
+    id: text('id').primaryKey().$defaultFn(() => newId('wait')),
+    orgId: text('org_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    leadId: text('lead_id')
+      .notNull()
+      .references(() => leads.id, { onDelete: 'cascade' }),
+    automationId: text('automation_id')
+      .notNull()
+      .references(() => automations.id, { onDelete: 'cascade' }),
+    runId: text('run_id'),
+    /** Nodo que quedo esperando; al resumir se sigue por su `nextNodeId`. */
+    nodeId: text('node_id').notNull(),
+    /** Campo donde guardar la respuesta del lead (ej: "facturacion"). */
+    saveAs: text('save_as'),
+    contentId: text('content_id').references(() => contents.id, { onDelete: 'set null' }),
+    keywordId: text('keyword_id').references(() => keywords.id, { onDelete: 'set null' }),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('waits_lead_idx').on(t.leadId)],
+);
+
+/**
+ * Estado temporal del flujo OAuth de Instagram (proteccion CSRF).
+ * Se borra al consumirse o al expirar.
+ */
+export const oauthStates = pgTable('oauth_states', {
+  state: text('state').primaryKey(),
+  orgId: text('org_id')
+    .notNull()
+    .references(() => organizations.id, { onDelete: 'cascade' }),
+  redirectTo: text('redirect_to'),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
 
 /* ------------------------------------------------------------------ *
  * Reuniones, productos y ventas
@@ -820,6 +961,16 @@ export const appointmentsRelations = relations(appointments, ({ one }) => ({
 
 export const messagesRelations = relations(messages, ({ one }) => ({
   lead: one(leads, { fields: [messages.leadId], references: [leads.id] }),
+  conversation: one(conversations, {
+    fields: [messages.conversationId],
+    references: [conversations.id],
+  }),
+}));
+
+export const conversationsRelations = relations(conversations, ({ one, many }) => ({
+  lead: one(leads, { fields: [conversations.leadId], references: [leads.id] }),
+  assignee: one(users, { fields: [conversations.assignedTo], references: [users.id] }),
+  messages: many(messages),
 }));
 
 /* ------------------------------------------------------------------ *
@@ -840,6 +991,12 @@ export type Automation = typeof automations.$inferSelect;
 export type AutomationStep = typeof automationSteps.$inferSelect;
 export type AutomationRun = typeof automationRuns.$inferSelect;
 export type Message = typeof messages.$inferSelect;
+export type Conversation = typeof conversations.$inferSelect;
+export type NewConversation = typeof conversations.$inferInsert;
+export type AutomationWait = typeof automationWaits.$inferSelect;
+export type OAuthState = typeof oauthStates.$inferSelect;
+export type ConnectionMethod = (typeof connectionMethodEnum.enumValues)[number];
+export type AutomationStepType = (typeof automationStepEnum.enumValues)[number];
 export type Appointment = typeof appointments.$inferSelect;
 export type Product = typeof products.$inferSelect;
 export type Deal = typeof deals.$inferSelect;

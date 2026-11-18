@@ -77,15 +77,116 @@ lead viejo produce un "lead→venta 200%".
 | | |
 |---|---|
 | **Panel** | KPIs con variación vs. período anterior, leads/día, ingresos/día, embudo, contenido que más factura, reuniones próximas, leads estancados y *contenido mudo* (mucha view, cero leads). |
+| **Bandeja** | Los chats de Instagram dentro del CRM: lista de hilos, conversación completa, responder por DM. Cada hilo muestra de qué contenido vino el lead, su etapa, y **cuánto queda de la ventana de 24 h** que Meta da para responder. |
 | **Contenido** | La tabla central: views, leads, leads por 1.000 views, reuniones, ventas, lead→venta e ingresos por cada pieza. Ordenable. Incluye una fila **Sin atribuir** que expone los huecos de trazabilidad. |
 | **Pipeline** | Kanban con etapas configurables. Cada tarjeta muestra de qué contenido vino el lead. Se mueve con un selector (funciona con teclado, no hace falta arrastrar). |
 | **Leads** | Listado con búsqueda y filtros, ficha completa con historial, conversación de Instagram, recorrido de contenidos, reuniones y ventas. |
-| **Automatizaciones** | El "ManyChat propio": disparadores por keyword y pasos encadenados, con el log de cada ejecución (incluidos los pasos que fallan). |
+| **Automatizaciones** | El ManyChat propio: **constructor visual de flujos** con ramificación, pasos que esperan la respuesta del lead, botón de prueba en seco y el log de cada ejecución. |
 | **Integraciones** | URLs y secretos de cada webhook, estado de la cuenta de Instagram, claves de API y las últimas entregas recibidas con su payload crudo. |
 
 ---
 
+## La bandeja de Instagram
+
+Los DMs se leen y se responden **dentro del CRM**. Entran por el webhook en
+tiempo real, y la primera carga se puede importar con el botón *Sincronizar*.
+
+Lo que la hace distinta de un inbox cualquiera:
+
+- **Ventana de 24 h visible.** Meta solo deja escribirle a alguien dentro de las
+  24 h posteriores a *su* último mensaje. El composer lo avisa antes de que
+  escribas y bloquea el envío en vez de dejar que la API lo rechace después.
+- **Límite real de Instagram.** Un DM no puede pasar de 1000 **bytes**; el
+  contador los cuenta en bytes, no en caracteres, porque un emoji ocupa cuatro.
+- **Cada hilo sabe de qué reel vino.** El encabezado linkea al contenido que
+  trajo al lead y a su etapa del pipeline.
+- **Los DMs que mandás desde el celular aparecen igual.** Meta los manda como
+  *echo* y el CRM los refleja, así el equipo no responde dos veces.
+
+Sobre abrir el chat en Instagram: **Meta no documenta ninguna URL para abrir un
+hilo existente**. La bandeja ofrece el enlace al perfil del lead (que sí es
+estable) y, cuando conoce el id del hilo, un atajo a `instagram.com/direct/t/…`
+marcado como no oficial, porque puede dejar de funcionar sin aviso.
+
+---
+
+## Tu propio ManyChat
+
+Los flujos se arman en un lienzo: cada paso es un nodo y las flechas definen por
+dónde sigue.
+
+```
+ [Disparador: comentario "GUION"]
+            │
+    [Responder comentario]
+            │
+     [Entregar recurso]  ──→ DM con el link
+            │
+        [Etiquetar]
+            │
+   [Asignar responsable]  ──→ reparto equitativo
+            │
+  [Preguntar y esperar]   ──→ "¿ya vendés o recién empezás?"
+            │                 el flujo PAUSA acá
+      [¿Qué respondió?]
+        sí ╱        ╲ no
+   [Mandar link]   [Etiquetar "está empezando"]
+   [→ Calificado]  [→ Conversando]
+```
+
+Tres cosas que un flujo lineal no puede hacer:
+
+1. **Ramificar.** Un nodo de condición evalúa la respuesta del lead, sus
+   etiquetas, su origen o cualquier campo propio, y manda cada caso por su lado.
+2. **Esperar una respuesta de verdad.** `Preguntar y esperar` manda el mensaje y
+   corta la ejecución. Cuando el lead contesta, el webhook reanuda el flujo
+   desde ese punto y guarda su respuesta en un campo del lead. La espera gana
+   siempre sobre las palabras clave: si alguien está contestando una pregunta,
+   su mensaje no arranca otro flujo porque contenga una keyword.
+3. **Probarse sin molestar a nadie.** El botón *Probar* recorre el flujo en seco
+   contra un lead real: muestra cada paso y qué rama tomó, sin mandar un solo
+   DM ni mover una etapa.
+
+La palabra clave es lo que ata un contenido con un flujo. Sin keyword, los leads
+de ese reel entran sin atribución; la tabla de contenido lo muestra como
+*Sin atribuir*.
+
+---
+
 ## Integraciones
+
+### Conectar Instagram
+
+Desde *Integraciones* → **Conectar Instagram**. Meta tiene hoy dos caminos y cuál
+te toca depende de cómo esté dada de alta tu app:
+
+| | Instagram Login | Unified Login |
+|---|---|---|
+| OAuth | `www.instagram.com/oauth/authorize` | `www.facebook.com/dialog/oauth` (Facebook Login for Business) |
+| Host de la API | `graph.instagram.com` | `graph.facebook.com` |
+| Token | de usuario de Instagram, 60 días, **renovable** | de sistema del portafolio de negocio (BISU) |
+| Permisos | `instagram_business_basic`, `…manage_messages`, `…manage_comments` | `instagram_basic`, `instagram_manage_messages`, `instagram_manage_comments`, `instagram_manage_insights` |
+| Hace falta | `INSTAGRAM_APP_ID` + `INSTAGRAM_APP_SECRET` | `META_APP_ID` + `META_APP_SECRET` + `META_CONFIG_ID` |
+
+La app implementa los dos. El redirect a registrar en Meta es siempre:
+
+```
+<APP_URL>/api/instagram/callback
+```
+
+Con el camino *Instagram Login* el token de 60 días se **renueva solo** cuando
+quedan menos de 10 días. Un token que pasa 60 días sin refrescarse muere y hay
+que volver a conectar a mano, así que el margen es a propósito.
+
+Dos advertencias honestas:
+
+- Una página de la guía de migración de Meta dice que las apps nuevas ya no
+  pueden usar *Instagram Login*. No pude confirmarlo en las páginas de *Unified
+  Login*, así que conviene mirar el App Dashboard antes de decidir.
+- Los endpoints de mensajería de *Unified Login* **no están documentados** en las
+  páginas de ese producto. El cliente usa las mismas rutas sobre
+  `graph.facebook.com` con el id de la cuenta de Instagram, que es lo que la
+  documentación implica, pero no está confirmado por Meta.
 
 ### Instagram (webhook de Meta)
 
@@ -165,6 +266,8 @@ POST   /api/v1/conversions            Reunión, no-show, venta o reembolso
 GET    /api/v1/contents               Catálogo de contenidos
 POST   /api/v1/contents               Registrar un contenido
 GET    /api/v1/analytics/content      Reporte de atribución
+POST   /api/instagram/sync?what=      Importa publicaciones y/o bandeja (media|inbox|all)
+GET    /api/instagram/sync            Estado de la conexión (para monitoreo)
 ```
 
 Creá una clave (el servidor de desarrollo debe estar detenido si usás PGlite):
@@ -208,7 +311,7 @@ que agenda 4 reus por día"*.
 | `npm run db:generate` | Genera una migración SQL tras cambiar el esquema |
 | `npm run db:migrate` | Aplica las migraciones pendientes |
 | `npm run key:create -- "nombre"` | Crea una clave de API |
-| `npm test` | Tests (24 casos: matching de keywords, parseo de importes, mapeo de webhooks, e integración del embudo completo) |
+| `npm test` | Tests (42 casos: keywords, importes, mapeo de webhooks, embudo completo, flujos con ramificación, esperas de respuesta y bandeja) |
 | `npm run typecheck` | TypeScript en modo estricto |
 
 ---
@@ -225,21 +328,29 @@ src/
 │   └── seed.ts            Negocio de ejemplo, generado vía el pipeline real
 ├── server/
 │   ├── services/
-│   │   ├── ingest.ts      Puerta de entrada única de toda interacción
-│   │   ├── attribution.ts Resolución de contenido y matching de keywords
-│   │   ├── events.ts      Log inmutable + puntos de contacto
-│   │   ├── leads.ts       Upsert, etapas, etiquetas, listados
-│   │   ├── commerce.ts    Reuniones y ventas (congelan su atribución)
-│   │   ├── automations.ts Motor de pasos encadenados
-│   │   ├── analytics.ts   Las consultas que responden la pregunta del negocio
-│   │   └── webhooks.ts    Registro de entregas y mapeo configurable
-│   ├── integrations/      Instagram Graph API · ManyChat
+│   │   ├── ingest.ts          Puerta de entrada única de toda interacción
+│   │   ├── attribution.ts     Resolución de contenido y matching de keywords
+│   │   ├── events.ts          Log inmutable + puntos de contacto
+│   │   ├── leads.ts           Upsert, etapas, etiquetas, listados
+│   │   ├── commerce.ts        Reuniones y ventas (congelan su atribución)
+│   │   ├── automations.ts     Motor de flujos: grafo, ramas y esperas
+│   │   ├── inbox.ts           Hilos, ventana de 24 h y envío de DMs
+│   │   ├── instagram-sync.ts  Conexión, import de publicaciones y bandeja
+│   │   ├── analytics.ts       Las consultas que responden la pregunta del negocio
+│   │   └── webhooks.ts        Registro de entregas y mapeo configurable
+│   ├── integrations/      Instagram Graph API (dos caminos) · OAuth · ManyChat
 │   └── auth/apiKey.ts     Claves hasheadas con SHA-256
 ├── app/
 │   ├── api/webhooks/      instagram · manychat · [slug] configurable
+│   ├── api/instagram/     connect · callback · sync
 │   ├── api/v1/            API pública
-│   └── …                  Páginas del CRM
-└── components/            UI y gráficos (SVG inline, sin librería de charts)
+│   ├── inbox/             Bandeja de Instagram
+│   ├── automatizaciones/  Lista y constructor visual de flujos
+│   └── …                  Resto del CRM
+└── components/
+    ├── flow/              Constructor de flujos (React Flow)
+    ├── inbox/             Hilo, lista y composer
+    └── …                  UI y gráficos (SVG inline, sin librería de charts)
 ```
 
 **Por qué `ingest.ts` es una sola puerta:** si cada webhook resolviera la
@@ -247,6 +358,11 @@ atribución por su cuenta, tarde o temprano una vía quedaría sin ella y el
 reporte mentiría sin que nadie se entere.
 
 **El dinero se guarda siempre en centavos** (`integer`), nunca en coma flotante.
+
+**Un flujo con aristas se recorre como grafo.** Un paso sin salida termina su
+rama. (Al principio el motor caía al paso siguiente por posición cuando no había
+`nextNodeId`: el final de la rama "sí" seguía ejecutando la rama "no" y las dos
+hacían lo mismo. Hay un test que cubre exactamente ese caso.)
 
 ---
 
@@ -268,13 +384,25 @@ reporte mentiría sin que nadie se entere.
 - **PGlite es de un solo proceso.** El servidor de desarrollo bloquea
   `./.data/pgdata`: para correr `db:seed` o `key:create` hay que detenerlo.
   Con `DATABASE_URL` el problema desaparece.
-- **El paso `wait` de las automatizaciones no espera.** Queda registrado como
-  omitido en el log de la ejecución. Una espera real necesita un worker de cola
-  persistente; el webhook tiene que responder en milisegundos.
+- **El paso `wait` (esperar N minutos) no espera.** Queda registrado como omitido
+  en el log. Una espera por *tiempo* necesita un worker de cola; el webhook tiene
+  que responder en milisegundos. `Preguntar y esperar` sí pausa de verdad, porque
+  lo que la reanuda es un mensaje entrante y no un temporizador.
+- **La bandeja no actualiza sola.** Los mensajes nuevos entran por webhook, pero
+  la pantalla se refresca al navegar o al recargar: no hay websocket.
+- **Importar la bandeja trae como mucho 20 mensajes por hilo.** Es un límite de
+  la API de Meta, no del CRM.
+- **No hay URL oficial para abrir un hilo concreto en Instagram.** El atajo que
+  ofrece la bandeja no está documentado por Meta y puede romperse.
+- **Los endpoints de mensajería de Unified Login no están documentados.** Lo que
+  implementa el cliente para ese camino es una inferencia razonable, no una
+  especificación confirmada.
 - **No hay autenticación de usuarios en la UI.** La app corre en modo
   mono-organización (la primera de la base). El esquema y todos los servicios ya
   llevan `orgId`, así que pasar a multi-tenant es cambiar `getCurrentOrg()` por
   una lectura de sesión.
-- **Las métricas de Instagram no se sincronizan solas.** El cliente de la Graph
-  API está escrito (`fetchRecentMedia`, `fetchMediaInsights`) pero no hay un cron
-  que lo dispare.
+- **Las métricas de Instagram no se sincronizan solas.** Se importan con el botón
+  de *Integraciones* o llamando a `POST /api/instagram/sync`; no hay un cron que
+  lo dispare. Apuntá un cron externo a esa ruta con una clave de API.
+- **Los tokens se guardan en texto plano en la base.** Para producción conviene
+  cifrarlos o moverlos a un gestor de secretos.

@@ -24,6 +24,7 @@ import {
 } from '@/components/ui';
 import { TimeSeriesChart, FunnelChart } from '@/components/charts';
 import { formatMoney, formatNumber, formatPercent, formatDate, timeAgo } from '@/lib/format';
+import { EditContentForm } from '@/components/content-form';
 
 export const dynamic = 'force-dynamic';
 
@@ -79,16 +80,26 @@ export default async function ContenidoDetallePage({
             {content.igMediaId ? ` · media ${content.igMediaId}` : ''}
           </p>
         </div>
-        {content.permalink ? (
-          <a
-            href={content.permalink}
-            target="_blank"
-            rel="noreferrer"
-            className="rounded-lg bg-surface px-3 py-2 text-xs font-medium text-ink-2 hairline hover:text-ink"
-          >
-            Ver en Instagram ↗
-          </a>
-        ) : null}
+        <div className="flex items-center gap-2">
+          <EditContentForm
+            contentId={content.id}
+            title={content.title}
+            hook={content.hook}
+            angle={content.angle}
+            funnelStage={content.funnelStage}
+            adSpendCents={content.adSpendCents}
+          />
+          {content.permalink ? (
+            <a
+              href={content.permalink}
+              target="_blank"
+              rel="noreferrer"
+              className="rounded-lg bg-surface px-3 py-2 text-xs font-medium text-ink-2 hairline hover:text-ink"
+            >
+              Ver en Instagram ↗
+            </a>
+          ) : null}
+        </div>
       </header>
 
       <section className="grid grid-cols-2 gap-3 lg:grid-cols-5">

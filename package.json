@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.16",
+    "@xyflow/react": "^13.0.2",
     "clsx": "^2.1.1",
     "date-fns": "^4.4.0",
     "drizzle-orm": "^0.45.4",

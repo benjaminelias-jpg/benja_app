@@ -46,6 +46,8 @@ const pick = <T,>(items: T[]): T => items[Math.floor(rand() * items.length)];
 const between = (min: number, max: number) => min + rand() * (max - min);
 const chance = (probability: number) => rand() < probability;
 const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000);
+/** Nada puede ocurrir en el futuro: rompe las ventanas de tiempo y los reportes. */
+const noLaterThanNow = (date: Date) => (date.getTime() > Date.now() ? new Date() : date);
 
 const NOMBRES = [
   'Camila Rossi', 'Martin Duarte', 'Sofia Benitez', 'Lucas Fernandez', 'Valentina Gomez',
@@ -247,20 +249,83 @@ async function main() {
     })
     .returning();
 
+  // Flujo con ramificacion y espera de respuesta: muestra lo que un flujo
+  // lineal no puede hacer. El nodo n6 bifurca segun lo que conteste el lead.
   await db.insert(automationSteps).values([
-    { automationId: entregaRecurso.id, position: 0, type: 'reply_comment', config: { text: 'Te lo mando por DM ahora mismo 📩' } },
-    { automationId: entregaRecurso.id, position: 1, type: 'send_resource', config: { text: 'Hola {{nombre}}! Aca tenes {{recurso}}: {{link}}\n\nUna pregunta rapida: ¿ya estas vendiendo tu infoproducto o estas empezando?' } },
-    { automationId: entregaRecurso.id, position: 2, type: 'add_tag', config: { tags: ['recurso-entregado'] } },
-    { automationId: entregaRecurso.id, position: 3, type: 'set_stage', config: { stageKey: 'conversando' } },
-    { automationId: entregaRecurso.id, position: 4, type: 'assign_owner', config: { strategy: 'round_robin' } },
+    {
+      automationId: entregaRecurso.id, position: 0, type: 'reply_comment',
+      nodeId: 'n1', nextNodeId: 'n2', canvasX: 120, canvasY: 40,
+      config: { text: 'Te lo mando por DM ahora mismo 📩' },
+    },
+    {
+      automationId: entregaRecurso.id, position: 1, type: 'send_resource',
+      nodeId: 'n2', nextNodeId: 'n3', canvasX: 120, canvasY: 180,
+      config: { text: 'Hola {{nombre}}! Aca tenes {{recurso}}: {{link}}' },
+    },
+    {
+      automationId: entregaRecurso.id, position: 2, type: 'add_tag',
+      nodeId: 'n3', nextNodeId: 'n4', canvasX: 120, canvasY: 320,
+      config: { tags: ['recurso-entregado'] },
+    },
+    {
+      automationId: entregaRecurso.id, position: 3, type: 'assign_owner',
+      nodeId: 'n4', nextNodeId: 'n5', canvasX: 120, canvasY: 460,
+      config: { strategy: 'round_robin' },
+    },
+    {
+      automationId: entregaRecurso.id, position: 4, type: 'ask_question',
+      nodeId: 'n5', nextNodeId: 'n6', canvasX: 120, canvasY: 600,
+      config: {
+        text: 'Una pregunta rapida {{nombre}}: ¿ya estas vendiendo tu infoproducto o recien empezas?',
+        saveAs: 'facturacion',
+      },
+    },
+    {
+      automationId: entregaRecurso.id, position: 5, type: 'condition',
+      nodeId: 'n6', canvasX: 120, canvasY: 740,
+      config: {
+        match: 'any',
+        checks: [
+          { field: 'respuesta', op: 'contains', value: 'factur' },
+          { field: 'respuesta', op: 'contains', value: 'vendo' },
+          { field: 'respuesta', op: 'contains', value: 'vendiendo' },
+        ],
+      },
+      branches: [
+        { when: 'true', goTo: 'n7' },
+        { when: 'false', goTo: 'n9' },
+      ],
+    },
+    {
+      automationId: entregaRecurso.id, position: 6, type: 'send_dm',
+      nodeId: 'n7', nextNodeId: 'n8', canvasX: -140, canvasY: 900,
+      config: {
+        text: 'Buenisimo {{nombre}}. Agenda aca un diagnostico de 20 min: https://cal.com/academiaescala/diagnostico',
+      },
+    },
+    {
+      automationId: entregaRecurso.id, position: 7, type: 'set_stage',
+      nodeId: 'n8', canvasX: -140, canvasY: 1040,
+      config: { stageKey: 'calificado' },
+    },
+    {
+      automationId: entregaRecurso.id, position: 8, type: 'add_tag',
+      nodeId: 'n9', nextNodeId: 'n10', canvasX: 400, canvasY: 900,
+      config: { tags: ['esta-empezando'] },
+    },
+    {
+      automationId: entregaRecurso.id, position: 9, type: 'set_stage',
+      nodeId: 'n10', canvasX: 400, canvasY: 1040,
+      config: { stageKey: 'conversando' },
+    },
   ]);
 
   const [invitacionCall] = await db
     .insert(automations)
     .values({
       orgId: org.id,
-      name: 'Invitacion a llamada (lead calificado)',
-      description: 'Para leads que responden que ya facturan: manda el link de agenda.',
+      name: 'Pedido de agenda por DM',
+      description: 'Para quien escribe AGENDA por privado: manda el link y lo marca como calificado.',
       trigger: 'ig_dm_keyword',
       triggerConfig: { channel: 'ig_dm' },
       active: true,
@@ -268,9 +333,21 @@ async function main() {
     .returning();
 
   await db.insert(automationSteps).values([
-    { automationId: invitacionCall.id, position: 0, type: 'send_dm', config: { text: 'Perfecto {{nombre}}. Agenda aca tu diagnostico de 20 min: https://cal.com/academiaescala/diagnostico' } },
-    { automationId: invitacionCall.id, position: 1, type: 'set_stage', config: { stageKey: 'calificado' } },
-    { automationId: invitacionCall.id, position: 2, type: 'add_tag', config: { tags: ['invitado-a-call'] } },
+    {
+      automationId: invitacionCall.id, position: 0, type: 'send_dm',
+      nodeId: 'm1', nextNodeId: 'm2', canvasX: 120, canvasY: 40,
+      config: { text: 'Listo {{nombre}}, agenda aca: https://cal.com/academiaescala/diagnostico' },
+    },
+    {
+      automationId: invitacionCall.id, position: 1, type: 'set_stage',
+      nodeId: 'm2', nextNodeId: 'm3', canvasX: 120, canvasY: 180,
+      config: { stageKey: 'calificado' },
+    },
+    {
+      automationId: invitacionCall.id, position: 2, type: 'add_tag',
+      nodeId: 'm3', canvasX: 120, canvasY: 320,
+      config: { tags: ['pidio-agenda'] },
+    },
   ]);
 
   const createdKeywords = await db
@@ -293,7 +370,7 @@ async function main() {
   await db.insert(keywords).values({
     orgId: org.id,
     automationId: invitacionCall.id,
-    word: 'YA FACTURO',
+    word: 'AGENDA',
     matchType: 'contains',
     channel: 'ig_dm',
     resourceName: 'Link de agenda',
@@ -393,16 +470,34 @@ async function main() {
       occurredAt: createdAt,
     });
 
-    // Una parte responde el DM y queda calificada.
-    if (chance(0.55)) {
+    // El flujo quedo esperando respuesta: este DM lo reanuda y la condicion
+    // decide por que rama sigue.
+    const respondio = chance(0.55);
+    if (respondio) {
       await ingestInteraction({
         orgId: org.id,
         source: 'ig_dm',
-        text: chance(0.5) ? 'Ya facturo unos 2k al mes pero estancado' : 'Recien estoy empezando',
+        text: chance(0.5)
+          ? 'Ya facturo unos 2k al mes pero estoy estancado'
+          : 'Recien estoy empezando, todavia no vendi nada',
         igUserId: `IG${100_000 + i}`,
         igUsername: username,
         messageExternalId: `DM_${i}`,
-        occurredAt: new Date(createdAt.getTime() + between(0.2, 2) * 86_400_000),
+        occurredAt: noLaterThanNow(new Date(createdAt.getTime() + between(0.2, 2) * 86_400_000)),
+      });
+    }
+
+    // Algunos escriben despues pidiendo la agenda: ahi ya no hay espera abierta,
+    // asi que dispara la keyword y su propio flujo.
+    if (respondio && chance(0.3)) {
+      await ingestInteraction({
+        orgId: org.id,
+        source: 'ig_dm',
+        text: 'AGENDA, quiero la call',
+        igUserId: `IG${100_000 + i}`,
+        igUsername: username,
+        messageExternalId: `DM2_${i}`,
+        occurredAt: noLaterThanNow(new Date(createdAt.getTime() + between(2, 4) * 86_400_000)),
       });
     }
 

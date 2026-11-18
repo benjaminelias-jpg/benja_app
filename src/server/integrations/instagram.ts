@@ -1,49 +1,91 @@
 import { env } from '@/lib/env';
 
 /**
- * Cliente de la Instagram Graph API.
+ * Cliente de la API de Instagram.
  *
- * Si no hay token configurado, el cliente entra en modo `dry-run`: registra
- * la llamada y devuelve exito simulado. Asi se puede probar el embudo completo
- * (comentario -> DM -> lead -> reunion -> venta) sin conectar una cuenta real.
+ * Meta tiene hoy DOS caminos distintos para lo mismo, y no son intercambiables:
+ *
+ *   instagram_login  → host graph.instagram.com, token de usuario de Instagram,
+ *                      OAuth en www.instagram.com, scopes `instagram_business_*`.
+ *   unified_login    → host graph.facebook.com, token de sistema del portafolio
+ *                      de negocio (BISU), OAuth por Facebook Login for Business,
+ *                      scopes `instagram_*`.
+ *
+ * Toda la app habla con este modulo y nunca con un host concreto, asi que
+ * cambiar de camino es cambiar un campo de la cuenta, no reescribir el CRM.
+ *
+ * Sin token configurado el cliente entra en modo simulado: registra la llamada
+ * y devuelve exito, de modo que el embudo completo se puede probar sin conectar
+ * una cuenta real.
  */
 
-const GRAPH_VERSION = 'v21.0';
-const GRAPH_BASE = `https://graph.instagram.com/${GRAPH_VERSION}`;
+export const GRAPH_VERSION = 'v27.0';
+
+export type ConnectionMethod = 'instagram_login' | 'unified_login' | 'manual';
+
+export interface IgAuth {
+  /** Token de acceso vigente. */
+  token?: string | null;
+  /** Id de la cuenta profesional de Instagram (el que va en las rutas). */
+  igUserId: string;
+  method?: ConnectionMethod;
+}
 
 export interface IgResult<T = unknown> {
   ok: boolean;
+  /** true cuando no se llamo a la red porque no hay credenciales. */
   dryRun: boolean;
   data?: T;
   error?: string;
+  /** Codigo de error de Meta, util para distinguir "fuera de ventana" de "token vencido". */
+  code?: number;
 }
 
-async function igRequest<T>(
+function hostFor(method: ConnectionMethod | undefined): string {
+  return method === 'unified_login'
+    ? `https://graph.facebook.com/${GRAPH_VERSION}`
+    : `https://graph.instagram.com/${GRAPH_VERSION}`;
+}
+
+async function graphRequest<T>(
+  auth: IgAuth,
   path: string,
-  init: { method?: 'GET' | 'POST'; body?: unknown; token?: string | null } = {},
+  init: { method?: 'GET' | 'POST' | 'DELETE'; body?: unknown; query?: Record<string, string> } = {},
 ): Promise<IgResult<T>> {
-  const token = init.token ?? env.instagramToken;
+  const token = auth.token ?? env.instagramToken;
 
   if (!token || env.dryRunOutbound) {
-    return {
-      ok: true,
-      dryRun: true,
-      data: { simulated: true, path, body: init.body } as T,
-    };
+    return { ok: true, dryRun: true, data: { simulated: true, path, body: init.body } as T };
   }
 
-  const url = new URL(`${GRAPH_BASE}${path}`);
-  url.searchParams.set('access_token', token);
+  const url = new URL(`${hostFor(auth.method)}${path}`);
+  for (const [key, value] of Object.entries(init.query ?? {})) {
+    url.searchParams.set(key, value);
+  }
 
   try {
     const response = await fetch(url, {
       method: init.method ?? 'GET',
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        // El token va en la cabecera y nunca en la URL: asi no termina en los
+        // logs de acceso ni en el historial del navegador.
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
       body: init.body ? JSON.stringify(init.body) : undefined,
     });
-    const json = (await response.json()) as T & { error?: { message?: string } };
-    if (!response.ok) {
-      return { ok: false, dryRun: false, error: json?.error?.message ?? `HTTP ${response.status}` };
+
+    const json = (await response.json().catch(() => ({}))) as T & {
+      error?: { message?: string; code?: number; error_subcode?: number };
+    };
+
+    if (!response.ok || json?.error) {
+      return {
+        ok: false,
+        dryRun: false,
+        error: json?.error?.message ?? `HTTP ${response.status}`,
+        code: json?.error?.code,
+      };
     }
     return { ok: true, dryRun: false, data: json };
   } catch (error) {
@@ -51,58 +93,62 @@ async function igRequest<T>(
   }
 }
 
-/** DM directo a un usuario con el que ya existe una conversacion abierta. */
-export async function sendDirectMessage(params: {
-  igAccountId: string;
-  recipientIgId: string;
-  text: string;
-  token?: string | null;
-}): Promise<IgResult> {
-  return igRequest(`/${params.igAccountId}/messages`, {
-    method: 'POST',
-    token: params.token,
-    body: {
-      recipient: { id: params.recipientIgId },
-      message: { text: params.text },
-    },
-  });
+/* ------------------------------------------------------------------ *
+ * Perfil y cuentas
+ * ------------------------------------------------------------------ */
+
+export interface IgProfile {
+  id?: string;
+  user_id?: string;
+  username?: string;
+  name?: string;
+  account_type?: string;
+  profile_picture_url?: string;
+  followers_count?: number;
+  follows_count?: number;
+  media_count?: number;
+}
+
+const PROFILE_FIELDS = [
+  'user_id',
+  'username',
+  'name',
+  'account_type',
+  'profile_picture_url',
+  'followers_count',
+  'follows_count',
+  'media_count',
+].join(',');
+
+/** Perfil de la cuenta conectada (camino instagram_login). */
+export function getProfile(auth: IgAuth): Promise<IgResult<IgProfile>> {
+  return graphRequest<IgProfile>(auth, '/me', { query: { fields: PROFILE_FIELDS } });
 }
 
 /**
- * Respuesta privada a un comentario.
- *
- * Es el mecanismo exacto del "comenta X y te mando el recurso": Meta permite
- * abrir un DM contestando a un comentario, incluso sin conversacion previa,
- * dentro de los 7 dias posteriores al comentario.
+ * Cuentas de Instagram que el token puede manejar (camino unified_login).
+ * Un token de sistema cubre todas las cuentas que el cliente compartio.
  */
-export async function sendPrivateReply(params: {
-  igAccountId: string;
-  commentId: string;
-  text: string;
-  token?: string | null;
-}): Promise<IgResult> {
-  return igRequest(`/${params.igAccountId}/messages`, {
-    method: 'POST',
-    token: params.token,
-    body: {
-      recipient: { comment_id: params.commentId },
-      message: { text: params.text },
-    },
+export function listAssignedAccounts(
+  auth: IgAuth,
+): Promise<IgResult<{ data: Array<{ id: string; username: string }> }>> {
+  return graphRequest(
+    { ...auth, method: 'unified_login' },
+    '/me/assigned_instagram_accounts',
+    { query: { fields: 'id,username' } },
+  );
+}
+
+/** Perfil de una cuenta concreta por id (sirve en los dos caminos). */
+export function getAccountProfile(auth: IgAuth): Promise<IgResult<IgProfile>> {
+  return graphRequest<IgProfile>(auth, `/${auth.igUserId}`, {
+    query: { fields: PROFILE_FIELDS.replace('user_id,', 'id,') },
   });
 }
 
-/** Respuesta publica dentro del hilo de comentarios. */
-export async function replyToComment(params: {
-  commentId: string;
-  text: string;
-  token?: string | null;
-}): Promise<IgResult> {
-  return igRequest(`/${params.commentId}/replies`, {
-    method: 'POST',
-    token: params.token,
-    body: { message: params.text },
-  });
-}
+/* ------------------------------------------------------------------ *
+ * Publicaciones
+ * ------------------------------------------------------------------ */
 
 export interface IgMedia {
   id: string;
@@ -117,12 +163,10 @@ export interface IgMedia {
   comments_count?: number;
 }
 
-/** Trae las publicaciones recientes de la cuenta para importarlas como contenidos. */
-export async function fetchRecentMedia(params: {
-  igAccountId: string;
-  token?: string | null;
-  limit?: number;
-}): Promise<IgResult<{ data: IgMedia[] }>> {
+export function listMedia(
+  auth: IgAuth,
+  limit = 25,
+): Promise<IgResult<{ data: IgMedia[]; paging?: { cursors?: { after?: string } } }>> {
   const fields = [
     'id',
     'caption',
@@ -135,10 +179,9 @@ export async function fetchRecentMedia(params: {
     'like_count',
     'comments_count',
   ].join(',');
-  return igRequest<{ data: IgMedia[] }>(
-    `/${params.igAccountId}/media?fields=${fields}&limit=${params.limit ?? 25}`,
-    { token: params.token },
-  );
+  return graphRequest(auth, `/${auth.igUserId}/media`, {
+    query: { fields, limit: String(limit) },
+  });
 }
 
 export interface IgInsight {
@@ -146,22 +189,205 @@ export interface IgInsight {
   values: Array<{ value: number }>;
 }
 
-/** Metricas de una publicacion: reproducciones, alcance, guardados, compartidos. */
-export async function fetchMediaInsights(params: {
-  mediaId: string;
-  token?: string | null;
-  isReel?: boolean;
-}): Promise<IgResult<{ data: IgInsight[] }>> {
-  const metrics = params.isReel
-    ? ['plays', 'reach', 'likes', 'comments', 'shares', 'saved']
-    : ['impressions', 'reach', 'saved', 'shares'];
-  return igRequest<{ data: IgInsight[] }>(
-    `/${params.mediaId}/insights?metric=${metrics.join(',')}`,
-    { token: params.token },
-  );
+export function getMediaInsights(
+  auth: IgAuth,
+  mediaId: string,
+  isReel: boolean,
+): Promise<IgResult<{ data: IgInsight[] }>> {
+  const metrics = isReel
+    ? 'views,reach,likes,comments,shares,saved'
+    : 'views,reach,saved,shares';
+  return graphRequest(auth, `/${mediaId}/insights`, { query: { metric: metrics } });
 }
 
-/** Convierte el tipo de media de Instagram al tipo de contenido del CRM. */
+/* ------------------------------------------------------------------ *
+ * Conversaciones
+ * ------------------------------------------------------------------ */
+
+export interface IgConversation {
+  id: string;
+  updated_time?: string;
+}
+
+/**
+ * Hilos de la bandeja.
+ *
+ * La API devuelve solo `id` y `updated_time`: para saber con quien es cada hilo
+ * hay que leer sus mensajes. Los hilos en Solicitudes inactivos por mas de 30
+ * dias no vienen en la lista.
+ */
+export function listConversations(
+  auth: IgAuth,
+  options: { userId?: string } = {},
+): Promise<IgResult<{ data: IgConversation[] }>> {
+  const query: Record<string, string> = { platform: 'instagram' };
+  if (options.userId) query.user_id = options.userId;
+  return graphRequest(auth, `/${auth.igUserId}/conversations`, { query });
+}
+
+export function listConversationMessageIds(
+  auth: IgAuth,
+  conversationId: string,
+): Promise<IgResult<{ id: string; messages?: { data: Array<{ id: string; created_time: string }> } }>> {
+  return graphRequest(auth, `/${conversationId}`, { query: { fields: 'messages' } });
+}
+
+export interface IgMessage {
+  id: string;
+  created_time?: string;
+  from?: { id?: string; username?: string };
+  to?: { data?: Array<{ id?: string; username?: string }> };
+  message?: string;
+}
+
+/** Solo se pueden leer por id los 20 mensajes mas recientes de un hilo. */
+export function getMessage(auth: IgAuth, messageId: string): Promise<IgResult<IgMessage>> {
+  return graphRequest<IgMessage>(auth, `/${messageId}`, {
+    query: { fields: 'id,created_time,from,to,message' },
+  });
+}
+
+/* ------------------------------------------------------------------ *
+ * Envio
+ * ------------------------------------------------------------------ */
+
+export interface SendResult {
+  recipient_id?: string;
+  message_id?: string;
+}
+
+/** Limite duro de Meta: el texto de un DM no puede pasar de 1000 bytes. */
+export const MAX_DM_BYTES = 1000;
+
+export function dmByteLength(text: string): number {
+  return new TextEncoder().encode(text).length;
+}
+
+/**
+ * Recorta por bytes, no por caracteres: un emoji ocupa cuatro.
+ * El espacio del "…" se descuenta ANTES de recortar; si no, el resultado
+ * termina pasandose del limite justo en el caso que se queria evitar.
+ */
+export function truncateForDm(text: string): string {
+  if (dmByteLength(text) <= MAX_DM_BYTES) return text;
+
+  const ellipsis = '…';
+  const budget = MAX_DM_BYTES - dmByteLength(ellipsis);
+
+  let result = text;
+  while (dmByteLength(result) > budget && result.length > 0) {
+    result = result.slice(0, -1);
+  }
+  return `${result}${ellipsis}`;
+}
+
+export function sendText(
+  auth: IgAuth,
+  params: { recipientIgId: string; text: string; replyToMid?: string | null },
+): Promise<IgResult<SendResult>> {
+  const body: Record<string, unknown> = {
+    recipient: { id: params.recipientIgId },
+    message: { text: truncateForDm(params.text) },
+  };
+  if (params.replyToMid) body.reply_to = { mid: params.replyToMid };
+  return graphRequest<SendResult>(auth, `/${auth.igUserId}/messages`, { method: 'POST', body });
+}
+
+/**
+ * Respuesta privada a un comentario.
+ *
+ * Es el mecanismo del "comenta X y te mando el recurso": abre un DM aunque
+ * nunca hayan escrito antes. Reglas de Meta: un solo mensaje por comentario,
+ * dentro de los 7 dias, y los siguientes solo despues de que el lead responda.
+ */
+export function sendPrivateReply(
+  auth: IgAuth,
+  params: { commentId: string; text: string },
+): Promise<IgResult<SendResult>> {
+  return graphRequest<SendResult>(auth, `/${auth.igUserId}/messages`, {
+    method: 'POST',
+    body: {
+      recipient: { comment_id: params.commentId },
+      message: { text: truncateForDm(params.text) },
+    },
+  });
+}
+
+export function sendImage(
+  auth: IgAuth,
+  params: { recipientIgId: string; imageUrl: string },
+): Promise<IgResult<SendResult>> {
+  return graphRequest<SendResult>(auth, `/${auth.igUserId}/messages`, {
+    method: 'POST',
+    body: {
+      recipient: { id: params.recipientIgId },
+      message: { attachments: [{ type: 'image', payload: { url: params.imageUrl } }] },
+    },
+  });
+}
+
+/** Respuesta publica dentro del hilo de comentarios. */
+export function replyToComment(
+  auth: IgAuth,
+  params: { commentId: string; text: string },
+): Promise<IgResult<SendResult>> {
+  return graphRequest<SendResult>(auth, `/${params.commentId}/replies`, {
+    method: 'POST',
+    body: { message: params.text },
+  });
+}
+
+export function sendReaction(
+  auth: IgAuth,
+  params: { recipientIgId: string; messageId: string; reaction?: string },
+): Promise<IgResult<SendResult>> {
+  return graphRequest<SendResult>(auth, `/${auth.igUserId}/messages`, {
+    method: 'POST',
+    body: {
+      recipient: { id: params.recipientIgId },
+      sender_action: 'react',
+      payload: { message_id: params.messageId, reaction: params.reaction ?? 'love' },
+    },
+  });
+}
+
+/* ------------------------------------------------------------------ *
+ * Webhooks
+ * ------------------------------------------------------------------ */
+
+export const WEBHOOK_FIELDS_INSTAGRAM_LOGIN = [
+  'messages',
+  'messaging_postbacks',
+  'message_reactions',
+  'messaging_referral',
+  'messaging_seen',
+  'comments',
+  'live_comments',
+];
+
+export const WEBHOOK_FIELDS_UNIFIED_LOGIN = [
+  'messages',
+  'messaging_postbacks',
+  'message_reactions',
+  'messaging_referral',
+  'messaging_seen',
+  'comments',
+  'live_comments',
+  'mentions',
+];
+
+/** Suscribe la cuenta a los webhooks (necesario en el camino unified_login). */
+export function subscribeWebhooks(auth: IgAuth, fields: string[]): Promise<IgResult> {
+  return graphRequest(auth, `/${auth.igUserId}/subscribed_apps`, {
+    method: 'POST',
+    query: { subscribed_fields: fields.join(',') },
+  });
+}
+
+/* ------------------------------------------------------------------ *
+ * Utilidades
+ * ------------------------------------------------------------------ */
+
 export function mapMediaType(media: IgMedia): 'reel' | 'post' | 'carousel' | 'story' | 'ad' {
   if (media.media_product_type === 'REELS') return 'reel';
   if (media.media_product_type === 'STORY') return 'story';
@@ -170,7 +396,7 @@ export function mapMediaType(media: IgMedia): 'reel' | 'post' | 'carousel' | 'st
   return 'post';
 }
 
-/** Extrae un titulo legible a partir del caption (primera linea, sin hashtags). */
+/** Titulo legible a partir del caption: primera linea util, sin hashtags. */
 export function titleFromCaption(caption: string | undefined, fallback = 'Publicacion'): string {
   if (!caption) return fallback;
   const firstLine = caption
@@ -179,4 +405,89 @@ export function titleFromCaption(caption: string | undefined, fallback = 'Public
     .find((line) => line.length > 0 && !line.startsWith('#'));
   if (!firstLine) return fallback;
   return firstLine.length > 80 ? `${firstLine.slice(0, 77)}...` : firstLine;
+}
+
+/** Convierte las insights de Meta en un objeto plano por nombre de metrica. */
+export function insightsToMap(insights: IgInsight[] | undefined): Record<string, number> {
+  const result: Record<string, number> = {};
+  for (const insight of insights ?? []) {
+    result[insight.name] = insight.values?.[0]?.value ?? 0;
+  }
+  return result;
+}
+
+/* ------------------------------------------------------------------ *
+ * Ventana de mensajeria
+ * ------------------------------------------------------------------ */
+
+/** Ventana estandar para responder un mensaje del usuario. */
+export const MESSAGING_WINDOW_HOURS = 24;
+
+export interface MessagingWindow {
+  open: boolean;
+  /** Horas restantes; 0 si ya cerro. */
+  hoursLeft: number;
+  reason: string;
+}
+
+/**
+ * Meta solo permite escribirle a alguien dentro de las 24 h siguientes a SU
+ * ultimo mensaje. Mostrarlo en la bandeja evita el error mas comun de un CRM
+ * de Instagram: redactar una respuesta que la API va a rechazar.
+ */
+export function messagingWindow(lastInboundAt: Date | null | undefined): MessagingWindow {
+  if (!lastInboundAt) {
+    return {
+      open: false,
+      hoursLeft: 0,
+      reason: 'El lead todavia no escribio: no hay ventana abierta.',
+    };
+  }
+  // Un reloj desfasado o un dato mal importado puede dar una fecha futura:
+  // sin este piso, la ventana mostraria mas de 24 h, que no existe.
+  const elapsedHours = Math.max(0, (Date.now() - new Date(lastInboundAt).getTime()) / 3_600_000);
+  const hoursLeft = MESSAGING_WINDOW_HOURS - elapsedHours;
+  if (hoursLeft <= 0) {
+    return {
+      open: false,
+      hoursLeft: 0,
+      reason: 'Pasaron mas de 24 h desde su ultimo mensaje: Instagram va a rechazar el envio.',
+    };
+  }
+  return {
+    open: true,
+    hoursLeft,
+    reason: `Quedan ${hoursLeft < 1 ? `${Math.round(hoursLeft * 60)} min` : `${Math.floor(hoursLeft)} h`} para responder.`,
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * Enlaces a Instagram
+ * ------------------------------------------------------------------ */
+
+/**
+ * Enlace documentado por Meta: abre un hilo nuevo o existente con la cuenta
+ * profesional. Es el que se pone en la bio o en un anuncio, no el que abre el
+ * chat con un lead concreto.
+ */
+export function igMeLink(professionalUsername: string, ref?: string): string {
+  const base = `https://ig.me/${professionalUsername.replace(/^@/, '')}`;
+  return ref ? `${base}?ref=${encodeURIComponent(ref)}` : base;
+}
+
+/** Perfil del lead. Siempre funciona. */
+export function profileLink(username: string): string {
+  return `https://www.instagram.com/${username.replace(/^@/, '')}/`;
+}
+
+/**
+ * Abre el hilo concreto en Instagram web.
+ *
+ * ATENCION: Meta no documenta ninguna URL para abrir un hilo existente. Esta
+ * ruta funciona hoy en la web de Instagram pero no es oficial y puede romperse;
+ * por eso la bandeja la ofrece como atajo secundario y nunca como unica via
+ * para leer o responder un chat.
+ */
+export function directThreadLink(igThreadId: string): string {
+  return `https://www.instagram.com/direct/t/${igThreadId}`;
 }

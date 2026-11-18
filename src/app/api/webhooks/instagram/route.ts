@@ -96,21 +96,52 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // --- Mensajes directos y respuestas a stories ------------------
+      // --- Mensajes directos, stories y ecos -------------------------
       for (const messaging of entry.messaging ?? []) {
         const senderId = messaging.sender?.id;
-        // Los ecos son mensajes que enviamos nosotros: no generan lead.
-        if (!senderId || messaging.message?.is_echo) continue;
-        if (senderId === entry.id) continue;
+        if (!senderId) continue;
+
+        // Un eco es un DM que mandamos nosotros, posiblemente desde el celular.
+        // No genera lead, pero SI tiene que aparecer en la bandeja: si no, el
+        // CRM muestra media conversacion y el equipo responde dos veces.
+        if (messaging.message?.is_echo || senderId === entry.id) {
+          const recipientId = messaging.recipient?.id;
+          if (recipientId && messaging.message?.text) {
+            const mirrored = await mirrorOutboundEcho({
+              orgId: org.id,
+              igUserId: recipientId,
+              text: messaging.message.text,
+              mid: messaging.message.mid ?? null,
+              at: messaging.timestamp ? new Date(messaging.timestamp) : new Date(),
+            });
+            if (mirrored) results.push({ leadId: mirrored, type: 'echo' });
+          }
+          continue;
+        }
+
+        // Acuse de lectura: no es un mensaje, no debe crear eventos.
+        if (messaging.read) continue;
+
+        // Reaccion a un mensaje: se registra como evento, sin texto.
+        if (messaging.reaction) {
+          results.push({ leadId: '', type: 'reaction' });
+          continue;
+        }
 
         const storyId = messaging.message?.reply_to?.story?.id;
+        const attachments = messaging.message?.attachments ?? [];
+        const text =
+          messaging.message?.text ??
+          (attachments.length > 0 ? `(${attachments[0]?.type ?? 'adjunto'})` : null);
+
         const result = await ingestInteraction({
           orgId: org.id,
           source: storyId ? 'ig_story_reply' : 'ig_dm',
-          text: messaging.message?.text ?? null,
+          text,
           igUserId: senderId,
           igMediaId: storyId ?? null,
           messageExternalId: messaging.message?.mid ?? null,
+          replyToMid: messaging.message?.reply_to?.mid ?? null,
           occurredAt: messaging.timestamp ? new Date(messaging.timestamp) : undefined,
         });
         results.push({ leadId: result.lead.id, type: storyId ? 'story_reply' : 'dm' });
@@ -140,6 +171,56 @@ export async function POST(request: NextRequest) {
  * Forma del payload de Meta (subconjunto que usamos)
  * ------------------------------------------------------------------ */
 
+/**
+ * Refleja en la bandeja un DM que la cuenta envio por fuera del CRM.
+ * Solo actualiza si el lead ya existe: un eco no es motivo para crear uno.
+ */
+async function mirrorOutboundEcho(params: {
+  orgId: string;
+  igUserId: string;
+  text: string;
+  mid: string | null;
+  at: Date;
+}): Promise<string | null> {
+  const { getDb } = await import('@/db/client');
+  const { leads, messages } = await import('@/db/schema');
+  const { and, eq } = await import('drizzle-orm');
+  const { attachMessageToConversation } = await import('@/server/services/inbox');
+
+  const db = await getDb();
+  const [lead] = await db
+    .select()
+    .from(leads)
+    .where(and(eq(leads.orgId, params.orgId), eq(leads.igUserId, params.igUserId)))
+    .limit(1);
+  if (!lead) return null;
+
+  const conversationId = await attachMessageToConversation({
+    orgId: params.orgId,
+    leadId: lead.id,
+    direction: 'outbound',
+    preview: params.text,
+    occurredAt: params.at,
+  });
+
+  await db
+    .insert(messages)
+    .values({
+      orgId: params.orgId,
+      leadId: lead.id,
+      conversationId,
+      direction: 'outbound',
+      channel: 'ig_dm',
+      body: params.text,
+      externalId: params.mid,
+      sentAt: params.at,
+      status: 'sent',
+    })
+    .onConflictDoNothing();
+
+  return lead.id;
+}
+
 interface InstagramWebhookBody {
   object?: string;
   entry?: Array<{
@@ -164,8 +245,11 @@ interface InstagramWebhookBody {
         mid?: string;
         text?: string;
         is_echo?: boolean;
-        reply_to?: { story?: { id?: string; url?: string } };
+        attachments?: Array<{ type?: string; payload?: { url?: string } }>;
+        reply_to?: { mid?: string; story?: { id?: string; url?: string } };
       };
+      read?: { mid?: string };
+      reaction?: { mid?: string; action?: string; reaction?: string; emoji?: string };
     }>;
   }>;
 }

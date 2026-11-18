@@ -13,6 +13,29 @@ export const env = {
   get appUrl(): string {
     return process.env.APP_URL?.trim() || 'http://localhost:3000';
   },
+  // --- Camino instagram_login (graph.instagram.com) ---
+  get instagramAppId(): string | undefined {
+    return process.env.INSTAGRAM_APP_ID?.trim() || undefined;
+  },
+  get instagramAppSecret(): string | undefined {
+    return process.env.INSTAGRAM_APP_SECRET?.trim() || undefined;
+  },
+
+  // --- Camino unified_login (graph.facebook.com, Facebook Login for Business) ---
+  get metaAppId(): string | undefined {
+    return process.env.META_APP_ID?.trim() || undefined;
+  },
+  get metaConfigId(): string | undefined {
+    return process.env.META_CONFIG_ID?.trim() || undefined;
+  },
+
+  /** Cual de los dos caminos ofrece la UI por defecto. */
+  get defaultConnectionMethod(): 'instagram_login' | 'unified_login' {
+    return process.env.INSTAGRAM_CONNECTION_METHOD === 'unified_login'
+      ? 'unified_login'
+      : 'instagram_login';
+  },
+
   /** Token del handshake GET que Meta hace al registrar el webhook de Instagram. */
   get metaVerifyToken(): string {
     return process.env.META_VERIFY_TOKEN?.trim() || 'hookcrm-dev-verify';

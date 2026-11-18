@@ -6,6 +6,7 @@ import clsx from 'clsx';
 
 const LINKS = [
   { href: '/', label: 'Panel', icon: 'chart' },
+  { href: '/inbox', label: 'Bandeja', icon: 'chat' },
   { href: '/contenido', label: 'Contenido', icon: 'play' },
   { href: '/pipeline', label: 'Pipeline', icon: 'columns' },
   { href: '/leads', label: 'Leads', icon: 'users' },
@@ -111,6 +112,12 @@ function Icon({ name }: { name: string }) {
         <svg {...common}>
           <path d="M3 3v18h18" />
           <path d="M7 15l4-5 3 3 5-7" />
+        </svg>
+      );
+    case 'chat':
+      return (
+        <svg {...common}>
+          <path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.4 8.4 0 0 1-3.8-.9L3 20.5l1.5-4.4A8.4 8.4 0 0 1 12 3.1a8.4 8.4 0 0 1 9 8.4Z" />
         </svg>
       );
     case 'play':

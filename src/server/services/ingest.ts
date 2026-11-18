@@ -18,7 +18,8 @@ import {
   incrementKeywordCounter,
   type ContentRef,
 } from './attribution';
-import { runAutomation } from './automations';
+import { runAutomation, resumeAutomation, pendingWaitForLead } from './automations';
+import { attachMessageToConversation } from './inbox';
 
 /**
  * Punto de entrada unico para cualquier interaccion entrante.
@@ -56,6 +57,9 @@ export interface IngestInteractionInput {
   /** Id del comentario en Instagram: habilita la respuesta privada. */
   commentId?: string | null;
   messageExternalId?: string | null;
+  /** Id del hilo de Instagram, si el webhook lo trae. */
+  igThreadId?: string | null;
+  replyToMid?: string | null;
   tags?: string[];
   customFields?: Record<string, unknown>;
   occurredAt?: Date;
@@ -142,18 +146,34 @@ export async function ingestInteraction(input: IngestInteractionInput): Promise<
     });
   }
 
-  // 5. El mensaje entrante queda guardado en la conversacion.
+  // 5. El mensaje entrante queda guardado en la conversacion y en la bandeja.
   if (input.text) {
+    const conversationId = isConversationalSource(input.source)
+      ? await attachMessageToConversation({
+          orgId: input.orgId,
+          leadId: lead.id,
+          direction: 'inbound',
+          preview: input.text,
+          occurredAt,
+          igThreadId: input.igThreadId ?? null,
+        })
+      : null;
+
     await db
       .insert(messages)
       .values({
         orgId: input.orgId,
         leadId: lead.id,
+        conversationId,
         contentId: content?.id ?? null,
         direction: 'inbound',
         channel,
         body: input.text,
         externalId: input.messageExternalId ?? null,
+        replyToMid: input.replyToMid ?? null,
+        // Sin esto, un mensaje importado o historico aparece como de ahora y
+        // el hilo queda desordenado.
+        sentAt: occurredAt,
       })
       .onConflictDoNothing();
 
@@ -171,9 +191,25 @@ export async function ingestInteraction(input: IngestInteractionInput): Promise<
     });
   }
 
-  // 6. Keyword disparada: queda el evento y se ejecuta la automatizacion.
+  // 6. ¿Habia un flujo esperando la respuesta de este lead?
+  //
+  // Va ANTES de las keywords a proposito: si el lead esta contestando
+  // "¿ya facturas?", su respuesta no debe disparar una keyword suelta que
+  // casualmente aparezca en el texto. La conversacion en curso manda.
   let automationRunId: string | null = null;
-  if (keyword) {
+  let resumed = false;
+
+  if (input.text && isConversationalSource(input.source)) {
+    const wait = await pendingWaitForLead(lead.id);
+    if (wait) {
+      const result = await resumeAutomation(wait.id, input.text, lead);
+      automationRunId = result?.runId ?? null;
+      resumed = true;
+    }
+  }
+
+  // 7. Keyword disparada: queda el evento y se ejecuta la automatizacion.
+  if (keyword && !resumed) {
     await incrementKeywordCounter(keyword.id);
     await recordEvent({
       orgId: input.orgId,
@@ -230,6 +266,11 @@ function sourceToChannel(source: LeadSource) {
     default:
       return 'ig_dm' as const;
   }
+}
+
+/** Fuentes donde el lead esta efectivamente conversando y puede responder. */
+function isConversationalSource(source: LeadSource): boolean {
+  return ['ig_dm', 'ig_story_reply', 'manychat', 'ig_mention'].includes(source);
 }
 
 function interactionEventType(source: LeadSource) {

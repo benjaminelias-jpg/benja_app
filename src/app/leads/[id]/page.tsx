@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { eq, and, asc } from 'drizzle-orm';
 import { getDb } from '@/db/client';
-import { users, messages } from '@/db/schema';
+import { users, messages, products } from '@/db/schema';
 import { getCurrentOrg, getDefaultPipeline } from '@/server/context';
 import { getLead } from '@/server/services/leads';
 import { getLeadTimeline } from '@/server/services/events';
@@ -11,7 +11,11 @@ import { listAppointmentsForLead, listDealsForLead } from '@/server/services/com
 import { Card, SectionTitle, Table, Th, Td, EmptyState, Badge, Avatar } from '@/components/ui';
 import { StageSelect } from '@/components/stage-select';
 import { OwnerSelect, TagInput } from '@/components/lead-controls';
+import { LeadQuickActions, LeadNotes } from '@/components/lead-actions';
+import { setMeetingOutcomeAction } from '@/app/leads/actions';
 import { formatMoney, formatDate, formatDateTime, timeAgo } from '@/lib/format';
+import { openLeadChatAction } from '@/app/inbox/actions';
+import { profileLink } from '@/server/integrations/instagram';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,15 +26,17 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ id:
   if (!row) notFound();
 
   const db = await getDb();
-  const [pipelineData, timeline, touches, appointments, deals, team, conversation] = await Promise.all([
-    getDefaultPipeline(org.id),
-    getLeadTimeline(id, 60),
-    touchesForLead(id),
-    listAppointmentsForLead(id),
-    listDealsForLead(id),
-    db.select().from(users).where(and(eq(users.orgId, org.id), eq(users.active, true))),
-    db.select().from(messages).where(eq(messages.leadId, id)).orderBy(asc(messages.sentAt)).limit(40),
-  ]);
+  const [pipelineData, timeline, touches, appointments, deals, team, conversation, catalog] =
+    await Promise.all([
+      getDefaultPipeline(org.id),
+      getLeadTimeline(id, 60),
+      touchesForLead(id),
+      listAppointmentsForLead(id),
+      listDealsForLead(id),
+      db.select().from(users).where(and(eq(users.orgId, org.id), eq(users.active, true))),
+      db.select().from(messages).where(eq(messages.leadId, id)).orderBy(asc(messages.sentAt)).limit(40),
+      db.select().from(products).where(eq(products.orgId, org.id)),
+    ]);
 
   const lead = row.lead;
   const displayName = lead.fullName ?? (lead.igUsername ? `@${lead.igUsername}` : 'Lead sin nombre');
@@ -58,6 +64,31 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ id:
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <form action={openLeadChatAction}>
+            <input type="hidden" name="leadId" value={lead.id} />
+            <button
+              type="submit"
+              className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-white"
+              style={{ background: 'var(--series-1)' }}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+                <path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.4 8.4 0 0 1-3.8-.9L3 20.5l1.5-4.4A8.4 8.4 0 0 1 12 3.1a8.4 8.4 0 0 1 9 8.4Z" />
+              </svg>
+              Abrir chat
+            </button>
+          </form>
+
+          {lead.igUsername ? (
+            <a
+              href={profileLink(lead.igUsername)}
+              target="_blank"
+              rel="noreferrer"
+              className="rounded-lg bg-surface px-3 py-1.5 text-xs text-ink-2 hairline hover:text-ink"
+            >
+              Ver perfil ↗
+            </a>
+          ) : null}
+
           {pipelineData ? (
             <StageSelect
               leadId={lead.id}
@@ -112,6 +143,25 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ id:
                 <Row label="Seguidores" value={String(lead.followersCount)} />
               ) : null}
             </dl>
+          </Card>
+
+          <Card>
+            <SectionTitle title="Acciones" hint="Lo que pasa fuera de Instagram también tiene que entrar al reporte" />
+            <LeadQuickActions
+              leadId={lead.id}
+              team={team.map((member) => ({ id: member.id, name: member.name }))}
+              products={catalog.map((product) => ({
+                id: product.id,
+                name: product.name,
+                priceCents: product.priceCents,
+              }))}
+              currency={org.currency}
+            />
+          </Card>
+
+          <Card>
+            <SectionTitle title="Notas" />
+            <LeadNotes leadId={lead.id} notes={lead.notes} />
           </Card>
 
           <Card>
@@ -175,7 +225,27 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ id:
                       <Td>
                         <span className="text-xs">{formatDateTime(appointment.scheduledAt)}</span>
                       </Td>
-                      <Td align="right">—</Td>
+                      <Td align="right">
+                        {appointment.status === 'scheduled' || appointment.status === 'confirmed' ? (
+                          <span className="flex justify-end gap-1">
+                            {(['held', 'no_show'] as const).map((status) => (
+                              <form key={status} action={setMeetingOutcomeAction}>
+                                <input type="hidden" name="appointmentId" value={appointment.id} />
+                                <input type="hidden" name="leadId" value={lead.id} />
+                                <input type="hidden" name="status" value={status} />
+                                <button
+                                  type="submit"
+                                  className="rounded-md bg-surface-2 px-1.5 py-0.5 text-[10px] text-ink-2 hairline hover:text-ink"
+                                >
+                                  {status === 'held' ? 'Asistió' : 'No asistió'}
+                                </button>
+                              </form>
+                            ))}
+                          </span>
+                        ) : (
+                          '—'
+                        )}
+                      </Td>
                     </tr>
                   ))}
                   {deals.map((entry) => (

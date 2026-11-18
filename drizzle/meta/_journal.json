@@ -8,6 +8,20 @@
       "when": 1795031273803,
       "tag": "0000_initial_schema",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1795034193276,
+      "tag": "0001_inbox_flows_oauth",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1795034528572,
+      "tag": "0002_wait_status",
+      "breakpoints": true
     }
   ]
 }

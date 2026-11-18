@@ -4,6 +4,7 @@ import { defaultRange, getContentPerformance, getKeywordPerformance } from '@/se
 import { Card, SectionTitle, Table, Th, Td, EmptyState, ContentTypeBadge, Badge } from '@/components/ui';
 import { BarCell } from '@/components/charts';
 import { RangePicker } from '@/components/range-picker';
+import { NewContentForm } from '@/components/content-form';
 import { formatMoney, formatNumber, formatPercent, formatDate } from '@/lib/format';
 
 export const dynamic = 'force-dynamic';
@@ -67,7 +68,10 @@ export default async function ContenidoPage({
             Cada fila responde: ¿cuanto facturo este contenido?
           </p>
         </div>
-        <RangePicker current={days} />
+        <div className="flex items-center gap-2">
+          <RangePicker current={days} />
+          <NewContentForm />
+        </div>
       </header>
 
       <Card padded={false}>

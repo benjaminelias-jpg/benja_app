@@ -130,17 +130,30 @@ describe('mapeo de webhooks genericos', () => {
 describe('plantillas de automatizacion', () => {
   const lead = { fullName: 'Camila Rossi', igUsername: 'camila.rossi', email: null } as Lead;
 
-  it('reemplaza las variables disponibles', () => {
+  it('usa el primer nombre, que es como se escribe un DM', () => {
     const text = renderTemplate('Hola {{nombre}}, aca va {{recurso}}: {{link}}', {
       orgId: 'org_1',
       lead,
       keyword: { resourceName: 'la guia', resourceUrl: 'https://x.com/g' } as never,
     });
-    expect(text).toBe('Hola Camila Rossi, aca va la guia: https://x.com/g');
+    expect(text).toBe('Hola Camila, aca va la guia: https://x.com/g');
+  });
+
+  it('tiene una variable aparte para el nombre completo', () => {
+    const text = renderTemplate('Para: {{nombrecompleto}}', { orgId: 'org_1', lead });
+    expect(text).toBe('Para: Camila Rossi');
   });
 
   it('deja intactas las variables que no conoce', () => {
     const text = renderTemplate('Hola {{nombre}} {{desconocida}}', { orgId: 'org_1', lead });
-    expect(text).toBe('Hola Camila Rossi {{desconocida}}');
+    expect(text).toBe('Hola Camila {{desconocida}}');
+  });
+
+  it('lee campos personalizados del lead', () => {
+    const text = renderTemplate('Facturas: {{campo.facturacion}}', {
+      orgId: 'org_1',
+      lead: { ...lead, customFields: { facturacion: '3k' } } as never,
+    });
+    expect(text).toBe('Facturas: 3k');
   });
 });

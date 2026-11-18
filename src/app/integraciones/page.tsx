@@ -2,15 +2,25 @@ import { eq } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { instagramAccounts } from '@/db/schema';
 import { getCurrentOrg } from '@/server/context';
+import { InstagramConnect } from '@/components/instagram-connect';
+import { missingConfig, redirectUri } from '@/server/integrations/instagram-oauth';
+import type { ConnectionMethod } from '@/server/integrations/instagram';
 import { listEndpoints, listRecentDeliveries } from '@/server/services/webhooks';
 import { listApiKeys } from '@/server/auth/apiKey';
 import { env } from '@/lib/env';
 import { Card, SectionTitle, Table, Th, Td, EmptyState, Badge } from '@/components/ui';
 import { formatDateTime, formatNumber } from '@/lib/format';
+import { ApiKeyCreator, EndpointCreator } from '@/components/integration-forms';
+import { revokeApiKeyAction, deleteEndpointAction, rotateSecretAction } from './actions';
 
 export const dynamic = 'force-dynamic';
 
-export default async function IntegracionesPage() {
+export default async function IntegracionesPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ ok?: string; error?: string }>;
+}) {
+  const feedback = await searchParams;
   const org = await getCurrentOrg();
   const db = await getDb();
 
@@ -26,6 +36,19 @@ export default async function IntegracionesPage() {
 
   return (
     <div className="space-y-5">
+      {feedback.ok || feedback.error ? (
+        <div
+          className="rounded-xl px-4 py-3 text-sm hairline"
+          style={{
+            background: 'var(--surface-1)',
+            color: feedback.ok ? 'var(--good-text)' : 'var(--critical)',
+          }}
+          role="status"
+        >
+          {feedback.ok ?? feedback.error}
+        </div>
+      ) : null}
+
       <header>
         <h1 className="text-xl font-semibold tracking-tight text-ink">Integraciones</h1>
         <p className="mt-1 text-sm text-ink-2">
@@ -36,9 +59,10 @@ export default async function IntegracionesPage() {
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
-          <SectionTitle title="Instagram" hint="Webhook de Meta para comentarios, DMs y stories" />
+          <SectionTitle title="Instagram" hint="Conexión de la cuenta y webhook de Meta" />
+
           {account ? (
-            <div className="mb-4 flex items-center gap-2">
+            <div className="mb-3 flex flex-wrap items-center gap-2">
               <Badge color={account.connected ? 'var(--good)' : 'var(--warning)'}>
                 {account.connected ? 'Conectada' : 'Pendiente'}
               </Badge>
@@ -47,11 +71,30 @@ export default async function IntegracionesPage() {
                 {formatNumber(account.followersCount, true)} seguidores
               </span>
             </div>
-          ) : (
-            <EmptyState title="Sin cuenta conectada" />
-          )}
+          ) : null}
 
-          <Field label="URL de callback" value={`${base}/api/webhooks/instagram`} />
+          <InstagramConnect
+            account={
+              account
+                ? {
+                    connected: account.connected,
+                    username: account.username,
+                    method: account.connectionMethod,
+                    scopes: account.scopes,
+                    tokenExpiresAt: account.tokenExpiresAt?.toISOString() ?? null,
+                    lastSyncedAt: account.lastSyncedAt?.toISOString() ?? null,
+                    lastInboxSyncAt: account.lastInboxSyncAt?.toISOString() ?? null,
+                    lastError: account.lastError,
+                  }
+                : null
+            }
+            defaultMethod={env.defaultConnectionMethod}
+            configIssue={missingConfig(env.defaultConnectionMethod as ConnectionMethod)}
+          />
+
+          <div className="mt-4 border-t border-[var(--grid)] pt-3">
+          <Field label="Redirect URI a registrar en Meta" value={redirectUri()} />
+          <Field label="URL de callback del webhook" value={`${base}/api/webhooks/instagram`} />
           <Field label="Verify token" value={env.metaVerifyToken} />
           <Field
             label="Campos a suscribir"
@@ -79,6 +122,7 @@ export default async function IntegracionesPage() {
               </span>
             </p>
           ) : null}
+          </div>
         </Card>
 
         <Card>
@@ -108,6 +152,7 @@ export default async function IntegracionesPage() {
         <SectionTitle
           title="Webhooks configurables"
           hint="Calendly, Cal.com, Hotmart, Stripe, Make... sin tocar codigo"
+          action={<EndpointCreator />}
         />
         {endpoints.length === 0 ? (
           <EmptyState title="Sin endpoints" />
@@ -120,6 +165,7 @@ export default async function IntegracionesPage() {
                 <Th>Mapeo</Th>
                 <Th align="right">Entregas</Th>
                 <Th align="right">Ultima</Th>
+                <Th align="right">—</Th>
               </tr>
             </thead>
             <tbody>
@@ -147,6 +193,22 @@ export default async function IntegracionesPage() {
                   <Td align="right">
                     <span className="text-xs text-muted">
                       {endpoint.lastDeliveryAt ? formatDateTime(endpoint.lastDeliveryAt) : '—'}
+                    </span>
+                  </Td>
+                  <Td align="right">
+                    <span className="flex justify-end gap-1.5">
+                      <form action={rotateSecretAction}>
+                        <input type="hidden" name="endpointId" value={endpoint.id} />
+                        <button type="submit" className="text-[10px] text-muted hover:text-ink" title="Genera un secreto nuevo: hay que actualizarlo en la herramienta">
+                          Rotar
+                        </button>
+                      </form>
+                      <form action={deleteEndpointAction}>
+                        <input type="hidden" name="endpointId" value={endpoint.id} />
+                        <button type="submit" className="text-[10px] text-muted hover:text-ink">
+                          Borrar
+                        </button>
+                      </form>
                     </span>
                   </Td>
                 </tr>
@@ -178,18 +240,34 @@ export default async function IntegracionesPage() {
           {keys.length === 0 ? (
             <p className="text-xs text-muted">
               Ninguna clave creada. En desarrollo la API responde sin clave usando la organizacion
-              por defecto.
+              por defecto; en produccion la clave es obligatoria.
             </p>
           ) : (
             <ul className="space-y-1 text-xs">
               {keys.map((key) => (
                 <li key={key.id} className="flex items-center justify-between gap-3">
-                  <span className="text-ink-2">{key.name}</span>
-                  <code className="text-muted">{key.prefix}••••••••</code>
+                  <span className={key.revokedAt ? 'text-muted line-through' : 'text-ink-2'}>
+                    {key.name}
+                  </span>
+                  <span className="flex items-center gap-2">
+                    <code className="text-muted">{key.prefix}••••••••</code>
+                    {key.revokedAt ? (
+                      <span className="text-[10px] text-muted">revocada</span>
+                    ) : (
+                      <form action={revokeApiKeyAction}>
+                        <input type="hidden" name="apiKeyId" value={key.id} />
+                        <button type="submit" className="text-[10px] text-muted hover:text-ink">
+                          Revocar
+                        </button>
+                      </form>
+                    )}
+                  </span>
                 </li>
               ))}
             </ul>
           )}
+
+          <ApiKeyCreator />
         </div>
       </Card>
 
