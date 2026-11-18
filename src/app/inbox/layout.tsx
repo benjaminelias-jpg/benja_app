@@ -3,7 +3,7 @@ import { getCurrentOrg } from '@/server/context';
 import { listConversations, countUnread } from '@/server/services/inbox';
 import { getConnectedAccount } from '@/server/services/instagram-sync';
 import { messagingWindow } from '@/server/integrations/instagram';
-import { Avatar, Badge } from '@/components/ui';
+import { Avatar } from '@/components/ui';
 import { ConversationRow } from '@/components/inbox/conversation-row';
 import { SyncInboxButton } from '@/components/inbox/sync-button';
 import { formatNumber } from '@/lib/format';
@@ -99,5 +99,3 @@ export default async function InboxLayout({
     </div>
   );
 }
-
-export { Avatar, Badge };

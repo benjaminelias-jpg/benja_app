@@ -71,6 +71,9 @@ export async function recordEvent(
     .returning();
 
   if (inserted.length > 0) {
+    // Los webhooks salientes salen solo de eventos NUEVOS: un reenvio idempotente
+    // no debe volver a avisarle a nadie.
+    await notifySubscribers(inserted[0]);
     return { event: inserted[0], created: true };
   }
 
@@ -91,6 +94,19 @@ export async function recordEvent(
   }
 
   return { event: existing, created: false };
+}
+
+/**
+ * Avisa a las integraciones suscritas. Nunca propaga su error: que un webhook
+ * saliente falle no puede hacer fallar el evento que lo origino.
+ */
+async function notifySubscribers(event: Event): Promise<void> {
+  try {
+    const { dispatchEvent } = await import('./outbound');
+    await dispatchEvent(event);
+  } catch (error) {
+    console.error('[events] no se pudo despachar el webhook saliente', error);
+  }
 }
 
 /** El contenido atribuido por defecto de un lead es su primer touch. */

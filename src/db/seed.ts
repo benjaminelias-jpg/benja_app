@@ -504,7 +504,7 @@ async function main() {
     // Reunion.
     if (chance(seed.meetingRate)) {
       meetings += 1;
-      const bookedAt = new Date(createdAt.getTime() + between(0.5, 4) * 86_400_000);
+      const bookedAt = noLaterThanNow(new Date(createdAt.getTime() + between(0.5, 4) * 86_400_000));
       const scheduledAt = new Date(bookedAt.getTime() + between(1, 5) * 86_400_000);
       const owner = pick(closers);
 
@@ -548,7 +548,11 @@ async function main() {
               ownerId: owner.id,
               externalId: `hotmart_${i}`,
               source: 'hotmart',
-              occurredAt: new Date(scheduledAt.getTime() + between(0.1, 3) * 86_400_000),
+              // El cierre nunca puede quedar en el futuro: un ingreso futuro no
+              // aparece en ningun reporte y el panel miente por lo bajo.
+              occurredAt: noLaterThanNow(
+                new Date(scheduledAt.getTime() + between(0.1, 3) * 86_400_000),
+              ),
             });
           } else if (chance(0.5)) {
             // Vio la oferta y la esta pensando.
@@ -556,14 +560,14 @@ async function main() {
               leadId: lead.id,
               stageId: stageByKey.oferta.id,
               source: 'seed',
-              occurredAt: new Date(scheduledAt.getTime() + 3_600_000),
+              occurredAt: noLaterThanNow(new Date(scheduledAt.getTime() + 3_600_000)),
             });
           } else if (chance(0.45)) {
             await moveLeadToStage({
               leadId: lead.id,
               stageId: stageByKey.perdido.id,
               source: 'seed',
-              occurredAt: new Date(scheduledAt.getTime() + 86_400_000),
+              occurredAt: noLaterThanNow(new Date(scheduledAt.getTime() + 86_400_000)),
             });
           }
         }
@@ -574,14 +578,14 @@ async function main() {
         leadId: lead.id,
         stageId: stageByKey.perdido.id,
         source: 'seed',
-        occurredAt: new Date(createdAt.getTime() + between(3, 9) * 86_400_000),
+        occurredAt: noLaterThanNow(new Date(createdAt.getTime() + between(3, 9) * 86_400_000)),
       });
     } else if (chance(0.3)) {
       await moveLeadToStage({
         leadId: lead.id,
         stageId: stageByKey.calificado.id,
         source: 'seed',
-        occurredAt: new Date(createdAt.getTime() + between(0.5, 3) * 86_400_000),
+        occurredAt: noLaterThanNow(new Date(createdAt.getTime() + between(0.5, 3) * 86_400_000)),
       });
     }
 

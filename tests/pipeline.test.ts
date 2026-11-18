@@ -377,3 +377,39 @@ describe('tasas de conversion sobre cohorte', () => {
     expect(reel.revenueCents).toBe(200_000);
   });
 });
+
+describe('eventos fechados en el futuro', () => {
+  it('no entran en los reportes, y por eso nada debe generarlos', async () => {
+    const { recordEvent } = await import('@/server/services/events');
+    const { getContentPerformance, defaultRange } = await import('@/server/services/analytics');
+
+    const [futuro] = await db
+      .insert(contents)
+      .values({ orgId, title: 'Reel del futuro', type: 'reel', views: 1000 })
+      .returning();
+
+    // Una venta "cerrada" mañana: no es un ingreso, es un dato mal fechado.
+    await recordEvent({
+      orgId,
+      contentId: futuro.id,
+      type: 'sale',
+      valueCents: 500_000,
+      occurredAt: new Date(Date.now() + 2 * 86_400_000),
+      dedupeKey: 'venta-del-futuro',
+    });
+
+    // El rango por defecto termina ahora: el evento queda afuera.
+    const rows = await getContentPerformance(orgId, defaultRange(30));
+    const reel = rows.find((row) => row.contentId === futuro.id)!;
+    expect(reel.revenueCents).toBe(0);
+    expect(reel.sales).toBe(0);
+
+    // Ampliando la ventana hacia adelante sí aparece: el evento existe, el
+    // problema es su fecha. Por eso el seed nunca fecha nada en el futuro.
+    const ampliado = await getContentPerformance(orgId, {
+      from: new Date(Date.now() - 30 * 86_400_000),
+      to: new Date(Date.now() + 7 * 86_400_000),
+    });
+    expect(ampliado.find((row) => row.contentId === futuro.id)!.revenueCents).toBe(500_000);
+  });
+});

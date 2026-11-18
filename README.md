@@ -82,7 +82,8 @@ lead viejo produce un "lead→venta 200%".
 | **Pipeline** | Kanban con etapas configurables. Cada tarjeta muestra de qué contenido vino el lead. Se mueve con un selector (funciona con teclado, no hace falta arrastrar). |
 | **Leads** | Listado con búsqueda y filtros, ficha completa con historial, conversación de Instagram, recorrido de contenidos, reuniones y ventas. |
 | **Automatizaciones** | El ManyChat propio: **constructor visual de flujos** con ramificación, pasos que esperan la respuesta del lead, botón de prueba en seco y el log de cada ejecución. |
-| **Integraciones** | URLs y secretos de cada webhook, estado de la cuenta de Instagram, claves de API y las últimas entregas recibidas con su payload crudo. |
+| **Integraciones** | Webhooks de entrada y de salida, estado de la cuenta de Instagram, claves de API y el registro de entregas en ambas direcciones con su payload crudo. |
+| **Conectá tu Claude** | El CRM expone un servidor MCP propio. Se conecta a Claude Code, a claude.ai o a Claude Desktop y tu Claude opera el CRM con tu sesión. |
 
 ---
 
@@ -233,6 +234,46 @@ Acepta sinónimos en español (`venta`, `compra`, `reunion`, `reu`, `no_show`…
 porque la gente nombra sus flujos como quiere. El importe se parsea desde
 `197`, `"197.50"`, `"$1.497,00"` o `"USD 2 997"`.
 
+### Webhooks salientes — conectar el CRM con otras apps
+
+La otra mitad: el CRM avisando cuando pasa algo. Se suscribe una URL a los
+eventos que interesen (`lead_created`, `meeting_booked`, `sale`, `stage_changed`,
+o `*` para todos) y el CRM manda un `POST` con el evento **y la atribución ya
+resuelta** — el dato que ninguna otra herramienta puede calcular por su cuenta.
+
+```jsonc
+{
+  "id": "evt_…",
+  "type": "sale",
+  "occurredAt": "2026-11-18T21:24:00.000Z",
+  "valueCents": 299700,
+  "lead":    { "igUsername": "camila.rossi", "stage": { "name": "Venta" }, "tags": [] },
+  "content": { "title": "Como cobrar 3000 USD sin audiencia enorme", "hook": "…" },
+  "deal":    { "amountCents": 299700, "currency": "USD" }
+}
+```
+
+Cada entrega lleva:
+
+| Cabecera | Para qué |
+|---|---|
+| `x-hook-event` | tipo de evento |
+| `x-hook-delivery` | id único de la entrega, para descartar duplicados |
+| `x-hook-timestamp` | segundos UNIX |
+| `x-hook-signature-256` | `sha256=HMAC(timestamp + "." + cuerpo, secreto)` |
+
+El timestamp entra en la firma a propósito: firmando solo el cuerpo, una copia
+interceptada se podría reenviar más tarde como si fuera nueva.
+
+Si el destino falla, se reintenta **5 veces** con espera creciente (1 min, 5, 30,
+2 h, 6 h) y después queda como *agotada*, con el botón para forzar el reintento
+cuando el destino vuelva. En un servidor siempre despierto los reintentos salen
+solos; en serverless conviene apuntar un cron a:
+
+```bash
+curl -X POST https://tu-crm.com/api/webhooks/outbound/retry -H "Authorization: Bearer hk_live_..."
+```
+
 ### Cualquier otra herramienta
 
 Los endpoints configurables traducen el payload de cualquier servicio sin tocar
@@ -285,6 +326,44 @@ producción la clave es obligatoria.
 
 ---
 
+## Conectá tu Claude (servidor MCP)
+
+El CRM expone un servidor MCP propio en `/api/mcp` con **23 herramientas**.
+Conectado a tu Claude, podés pedirle cosas como:
+
+> *¿Qué contenido me generó más facturación en los últimos 60 días?*
+> *Pasame los leads estancados y decime a quién escribirle primero.*
+> *Leé el chat con @camila.rossi, redactá una respuesta y mandala.*
+> *Registrá la venta de 1497 del lead que cerré recién por teléfono.*
+
+La pantalla **Conectá tu Claude** arma los comandos ya con tu URL. En resumen:
+
+**Claude Code**
+
+```bash
+claude mcp add --transport http hook-crm https://tu-crm.com/api/mcp --header "Authorization: Bearer hk_live_..."
+```
+
+**claude.ai** — Personalizar → Conectores → Agregar conector personalizado. Se
+pega la URL `https://tu-crm.com/api/mcp` y, en *Cabeceras de la petición*,
+`Authorization: Bearer hk_live_...`. Tiene que ser HTTPS en el puerto 443 y
+accesible desde internet: la conexión sale de la nube de Anthropic, no de tu
+máquina, así que `localhost` no sirve.
+
+**Claude Desktop** — lanza un proceso local; el proyecto trae un puente en
+`src/mcp/stdio.ts` que reenvía al CRM. La pantalla genera el JSON de
+`claude_desktop_config.json` listo para pegar.
+
+Las herramientas van de `reporte_de_atribucion` y `resumen_del_negocio` a
+`responder_dm`, `registrar_venta` y `probar_flujo`. Todas quedan acotadas a la
+organización de la clave: una clave no ve datos de otra cuenta.
+
+El transporte es Streamable HTTP sin sesión, que es lo que pide la revisión
+actual del protocolo. El `GET` sobre `/api/mcp` responde 405 con una pista
+legible, porque esa URL no se abre en el navegador.
+
+---
+
 ## Probarlo de punta a punta
 
 ```bash
@@ -311,7 +390,9 @@ que agenda 4 reus por día"*.
 | `npm run db:generate` | Genera una migración SQL tras cambiar el esquema |
 | `npm run db:migrate` | Aplica las migraciones pendientes |
 | `npm run key:create -- "nombre"` | Crea una clave de API |
-| `npm test` | Tests (42 casos: keywords, importes, mapeo de webhooks, embudo completo, flujos con ramificación, esperas de respuesta y bandeja) |
+| `npm run mcp` | Puente MCP por stdio (para Claude Desktop) |
+| `npm run webhooks:retry` | Reintenta las entregas salientes vencidas |
+| `npm test` | Tests (69 casos: keywords, importes, mapeo de webhooks, embudo completo, flujos con ramificación, esperas de respuesta, bandeja, webhooks salientes y servidor MCP) |
 | `npm run typecheck` | TypeScript en modo estricto |
 
 ---
@@ -337,14 +418,20 @@ src/
 │   │   ├── inbox.ts           Hilos, ventana de 24 h y envío de DMs
 │   │   ├── instagram-sync.ts  Conexión, import de publicaciones y bandeja
 │   │   ├── analytics.ts       Las consultas que responden la pregunta del negocio
-│   │   └── webhooks.ts        Registro de entregas y mapeo configurable
+│   │   ├── webhooks.ts        Entrada: registro de entregas y mapeo configurable
+│   │   └── outbound.ts        Salida: suscripciones, firma HMAC y reintentos
 │   ├── integrations/      Instagram Graph API (dos caminos) · OAuth · ManyChat
 │   └── auth/apiKey.ts     Claves hasheadas con SHA-256
+├── mcp/
+│   ├── tools.ts           Las 23 herramientas del servidor MCP
+│   └── stdio.ts           Puente stdio para Claude Desktop
 ├── app/
 │   ├── api/webhooks/      instagram · manychat · [slug] configurable
 │   ├── api/instagram/     connect · callback · sync
+│   ├── api/mcp/           Servidor MCP (Streamable HTTP)
 │   ├── api/v1/            API pública
 │   ├── inbox/             Bandeja de Instagram
+│   ├── claude/            Conectá tu Claude
 │   ├── automatizaciones/  Lista y constructor visual de flujos
 │   └── …                  Resto del CRM
 └── components/
@@ -358,6 +445,11 @@ atribución por su cuenta, tarde o temprano una vía quedaría sin ella y el
 reporte mentiría sin que nadie se entere.
 
 **El dinero se guarda siempre en centavos** (`integer`), nunca en coma flotante.
+
+**Los webhooks salientes salen solo de eventos nuevos.** `recordEvent` despacha
+cuando el evento se insertó de verdad; un reenvío idempotente no vuelve a avisar
+a nadie. Y si no hay suscripciones activas, el costo es cero: el chequeo está
+cacheado 30 segundos porque se llama en cada comentario y cada DM.
 
 **Un flujo con aristas se recorre como grafo.** Un paso sin salida termina su
 rama. (Al principio el motor caía al paso siguiente por posición cuando no había
@@ -406,3 +498,12 @@ hacían lo mismo. Hay un test que cubre exactamente ese caso.)
   lo dispare. Apuntá un cron externo a esa ruta con una clave de API.
 - **Los tokens se guardan en texto plano en la base.** Para producción conviene
   cifrarlos o moverlos a un gestor de secretos.
+- **Los webhooks salientes no tienen cola real.** Se despachan en segundo plano
+  y se reintentan con espera creciente, pero en serverless el proceso puede morir
+  antes: para eso está `POST /api/webhooks/outbound/retry`, pensado para un cron.
+- **El servidor MCP no implementa OAuth.** Se autentica con una clave de API en
+  la cabecera, que es lo que aceptan tanto Claude Code como los conectores
+  personalizados de claude.ai. La clave da acceso completo de lectura y escritura
+  a la organización, incluido el envío de DMs.
+- **El MCP crea una instancia por petición.** Es lo que exige el modo sin sesión
+  del SDK; con mucho tráfico convendría medirlo.

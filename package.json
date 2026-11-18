@@ -19,10 +19,13 @@
     "setup": "npm run db:migrate && npm run db:seed",
     "test": "vitest run",
     "test:watch": "vitest",
-    "key:create": "tsx src/db/create-key.ts"
+    "key:create": "tsx src/db/create-key.ts",
+    "mcp": "tsx src/mcp/stdio.ts",
+    "webhooks:retry": "tsx src/db/retry-webhooks.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.16",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@xyflow/react": "^13.0.2",
     "clsx": "^2.1.1",
     "date-fns": "^4.4.0",

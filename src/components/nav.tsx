@@ -12,6 +12,7 @@ const LINKS = [
   { href: '/leads', label: 'Leads', icon: 'users' },
   { href: '/automatizaciones', label: 'Automatizaciones', icon: 'bolt' },
   { href: '/integraciones', label: 'Integraciones', icon: 'plug' },
+  { href: '/claude', label: 'Conectá tu Claude', icon: 'spark' },
 ] as const;
 
 export function Sidebar({ orgName, igUsername }: { orgName: string; igUsername?: string | null }) {
@@ -148,6 +149,13 @@ function Icon({ name }: { name: string }) {
       return (
         <svg {...common}>
           <path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z" />
+        </svg>
+      );
+    case 'spark':
+      return (
+        <svg {...common}>
+          <path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1" />
+          <circle cx="12" cy="12" r="3" />
         </svg>
       );
     case 'plug':

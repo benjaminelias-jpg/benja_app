@@ -3,10 +3,15 @@
 import { revalidatePath } from 'next/cache';
 import { and, eq } from 'drizzle-orm';
 import { getDb } from '@/db/client';
-import { webhookEndpoints } from '@/db/schema';
+import { webhookEndpoints, webhookSubscriptions } from '@/db/schema';
 import { getCurrentOrg } from '@/server/context';
 import { createApiKey, revokeApiKey } from '@/server/auth/apiKey';
 import { randomToken, slugify } from '@/lib/ids';
+import {
+  sendTestEvent,
+  retryDelivery,
+  invalidateSubscriptionCache,
+} from '@/server/services/outbound';
 
 /**
  * Crea una clave de API. La clave en claro se devuelve UNA vez: después solo
@@ -106,5 +111,96 @@ export async function rotateSecretAction(formData: FormData) {
     .update(webhookEndpoints)
     .set({ secret: randomToken(24) })
     .where(and(eq(webhookEndpoints.orgId, org.id), eq(webhookEndpoints.id, endpointId)));
+  revalidatePath('/integraciones');
+}
+
+
+/* ------------------------------------------------------------------ *
+ * Webhooks salientes
+ * ------------------------------------------------------------------ */
+
+/** Alta de una suscripción: el CRM avisa a esta URL cuando pasa algo. */
+export async function createSubscriptionAction(formData: FormData) {
+  const name = String(formData.get('name') ?? '').trim();
+  const url = String(formData.get('url') ?? '').trim();
+  if (!name || !url) return;
+
+  // Una URL mal escrita falla en cada entrega: mejor rechazarla al crearla.
+  try {
+    const parsed = new URL(url);
+    if (!['http:', 'https:'].includes(parsed.protocol)) return;
+  } catch {
+    return;
+  }
+
+  const events = formData.getAll('events').map(String).filter(Boolean);
+
+  const org = await getCurrentOrg();
+  const db = await getDb();
+
+  await db.insert(webhookSubscriptions).values({
+    orgId: org.id,
+    name,
+    url,
+    events: events.length > 0 ? events : ['*'],
+    secret: randomToken(32),
+    description: String(formData.get('description') ?? '') || null,
+    active: true,
+  });
+
+  invalidateSubscriptionCache(org.id);
+  revalidatePath('/integraciones');
+}
+
+export async function toggleSubscriptionAction(formData: FormData) {
+  const subscriptionId = String(formData.get('subscriptionId') ?? '');
+  const active = String(formData.get('active') ?? '') === 'true';
+  if (!subscriptionId) return;
+
+  const org = await getCurrentOrg();
+  const db = await getDb();
+  await db
+    .update(webhookSubscriptions)
+    .set({ active })
+    .where(and(eq(webhookSubscriptions.orgId, org.id), eq(webhookSubscriptions.id, subscriptionId)));
+
+  invalidateSubscriptionCache(org.id);
+  revalidatePath('/integraciones');
+}
+
+export async function deleteSubscriptionAction(formData: FormData) {
+  const subscriptionId = String(formData.get('subscriptionId') ?? '');
+  if (!subscriptionId) return;
+
+  const org = await getCurrentOrg();
+  const db = await getDb();
+  await db
+    .delete(webhookSubscriptions)
+    .where(and(eq(webhookSubscriptions.orgId, org.id), eq(webhookSubscriptions.id, subscriptionId)));
+
+  invalidateSubscriptionCache(org.id);
+  revalidatePath('/integraciones');
+}
+
+/** Manda un evento de prueba para verificar la URL y la firma. */
+export async function testSubscriptionAction(
+  _previous: { ok?: boolean; message?: string },
+  formData: FormData,
+): Promise<{ ok?: boolean; message?: string }> {
+  const subscriptionId = String(formData.get('subscriptionId') ?? '');
+  if (!subscriptionId) return { ok: false, message: 'Falta la suscripción.' };
+
+  const result = await sendTestEvent(subscriptionId);
+  revalidatePath('/integraciones');
+
+  return result.ok
+    ? { ok: true, message: `Entregado (HTTP ${result.status}).` }
+    : { ok: false, message: result.error ?? `Falló (HTTP ${result.status ?? '—'}).` };
+}
+
+export async function retryDeliveryAction(formData: FormData) {
+  const deliveryId = String(formData.get('deliveryId') ?? '');
+  if (!deliveryId) return;
+  await retryDelivery(deliveryId);
   revalidatePath('/integraciones');
 }

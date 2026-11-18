@@ -6,6 +6,14 @@ import { InstagramConnect } from '@/components/instagram-connect';
 import { missingConfig, redirectUri } from '@/server/integrations/instagram-oauth';
 import type { ConnectionMethod } from '@/server/integrations/instagram';
 import { listEndpoints, listRecentDeliveries } from '@/server/services/webhooks';
+import {
+  listSubscriptions,
+  listOutboundDeliveries,
+  SUBSCRIBABLE_EVENTS,
+  signatureSnippet,
+} from '@/server/services/outbound';
+import { OutboundWebhooks } from '@/components/outbound-webhooks';
+import Link from 'next/link';
 import { listApiKeys } from '@/server/auth/apiKey';
 import { env } from '@/lib/env';
 import { Card, SectionTitle, Table, Th, Td, EmptyState, Badge } from '@/components/ui';
@@ -24,11 +32,13 @@ export default async function IntegracionesPage({
   const org = await getCurrentOrg();
   const db = await getDb();
 
-  const [endpoints, deliveries, keys, accounts] = await Promise.all([
+  const [endpoints, deliveries, keys, accounts, subscriptions, outbound] = await Promise.all([
     listEndpoints(org.id),
     listRecentDeliveries(20),
     listApiKeys(org.id),
     db.select().from(instagramAccounts).where(eq(instagramAccounts.orgId, org.id)),
+    listSubscriptions(org.id),
+    listOutboundDeliveries(org.id, 20),
   ]);
 
   const base = env.appUrl;
@@ -268,6 +278,55 @@ export default async function IntegracionesPage({
           )}
 
           <ApiKeyCreator />
+        </div>
+      </Card>
+
+      <OutboundWebhooks
+        subscriptions={subscriptions.map((subscription) => ({
+          id: subscription.id,
+          name: subscription.name,
+          url: subscription.url,
+          events: subscription.events,
+          secret: subscription.secret,
+          active: subscription.active,
+          deliveredCount: subscription.deliveredCount,
+          failedCount: subscription.failedCount,
+          lastStatus: subscription.lastStatus,
+          lastError: subscription.lastError,
+          lastDeliveryAt: subscription.lastDeliveryAt?.toISOString() ?? null,
+        }))}
+        deliveries={outbound.map((row) => ({
+          id: row.delivery.id,
+          subscriptionName: row.subscription.name,
+          eventType: row.delivery.eventType,
+          status: row.delivery.status,
+          attempts: row.delivery.attempts,
+          responseStatus: row.delivery.responseStatus,
+          error: row.delivery.error,
+          durationMs: row.delivery.durationMs,
+          createdAt: row.delivery.createdAt.toISOString(),
+        }))}
+        events={SUBSCRIBABLE_EVENTS}
+        signatureSnippet={signatureSnippet()}
+      />
+
+      <Card>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold text-ink">Conectá tu Claude</h2>
+            <p className="mt-1 max-w-xl text-xs text-ink-2">
+              El CRM expone un servidor MCP propio. Conectalo a Claude Code, a claude.ai o a Claude
+              Desktop y tu Claude puede leer la atribución, revisar la bandeja y operar el pipeline
+              con tu sesión.
+            </p>
+          </div>
+          <Link
+            href="/claude"
+            className="shrink-0 rounded-lg px-3 py-2 text-sm font-medium text-white"
+            style={{ background: 'var(--series-1)' }}
+          >
+            Ver cómo conectarlo
+          </Link>
         </div>
       </Card>
 

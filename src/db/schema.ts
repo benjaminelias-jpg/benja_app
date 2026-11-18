@@ -191,6 +191,15 @@ export const deliveryStatusEnum = pgEnum('delivery_status', [
   'failed',
 ]);
 
+/** Estado de una entrega SALIENTE: del CRM hacia otra herramienta. */
+export const outboundStatusEnum = pgEnum('outbound_status', [
+  'pending',
+  'delivered',
+  'retrying',
+  /** Se agotaron los reintentos. No se vuelve a intentar solo. */
+  'exhausted',
+]);
+
 export const matchTypeEnum = pgEnum('match_type', ['exact', 'contains', 'starts_with', 'regex']);
 
 /** Como se conecto la cuenta de Instagram. Meta tiene dos caminos distintos. */
@@ -859,6 +868,78 @@ export const webhookDeliveries = pgTable(
   (t) => [index('deliveries_received_idx').on(t.receivedAt), index('deliveries_status_idx').on(t.status)],
 );
 
+/**
+ * Webhook saliente: el CRM avisando a otra herramienta.
+ *
+ * Es la otra mitad de las integraciones. Los endpoints de `webhook_endpoints`
+ * reciben; estos mandan. Con esto el CRM se conecta con Make, Zapier, n8n,
+ * Slack o un backend propio sin que nadie tenga que consultar la API.
+ */
+export const webhookSubscriptions = pgTable(
+  'webhook_subscriptions',
+  {
+    id: text('id').primaryKey().$defaultFn(() => newId('sub')),
+    orgId: text('org_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    url: text('url').notNull(),
+    /** Tipos de evento a los que se suscribe. `*` es "todos". */
+    events: text('events').array().notNull().default(sql`ARRAY[]::text[]`),
+    /** Con este secreto se firma cada entrega (HMAC-SHA256). */
+    secret: text('secret').notNull(),
+    /** Cabeceras extra, por si el destino pide un token propio. */
+    headers: jsonb('headers').$type<Record<string, string>>().notNull().default({}),
+    active: boolean('active').notNull().default(true),
+    description: text('description'),
+
+    deliveredCount: integer('delivered_count').notNull().default(0),
+    failedCount: integer('failed_count').notNull().default(0),
+    lastDeliveryAt: timestamp('last_delivery_at', { withTimezone: true }),
+    lastStatus: integer('last_status'),
+    lastError: text('last_error'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('subscriptions_org_idx').on(t.orgId, t.active)],
+);
+
+/**
+ * Intento de entrega saliente.
+ *
+ * Se guarda el payload exacto que se mando y la respuesta recibida: cuando una
+ * integracion falla, lo primero que hace falta es ver que se envio de verdad.
+ */
+export const outboundDeliveries = pgTable(
+  'outbound_deliveries',
+  {
+    id: text('id').primaryKey().$defaultFn(() => newId('out')),
+    orgId: text('org_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    subscriptionId: text('subscription_id')
+      .notNull()
+      .references(() => webhookSubscriptions.id, { onDelete: 'cascade' }),
+    eventId: text('event_id').references(() => events.id, { onDelete: 'set null' }),
+    eventType: text('event_type').notNull(),
+    payload: jsonb('payload').$type<Record<string, unknown>>().notNull().default({}),
+
+    status: outboundStatusEnum('status').notNull().default('pending'),
+    attempts: integer('attempts').notNull().default(0),
+    responseStatus: integer('response_status'),
+    responseBody: text('response_body'),
+    error: text('error'),
+    durationMs: integer('duration_ms'),
+    /** Cuando toca el proximo reintento. El cron busca por aqui. */
+    nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    deliveredAt: timestamp('delivered_at', { withTimezone: true }),
+  },
+  (t) => [
+    index('outbound_pending_idx').on(t.status, t.nextAttemptAt),
+    index('outbound_subscription_idx').on(t.subscriptionId, t.createdAt),
+  ],
+);
+
 export const apiKeys = pgTable(
   'api_keys',
   {
@@ -1004,6 +1085,8 @@ export type Event = typeof events.$inferSelect;
 export type NewEvent = typeof events.$inferInsert;
 export type WebhookEndpoint = typeof webhookEndpoints.$inferSelect;
 export type WebhookDelivery = typeof webhookDeliveries.$inferSelect;
+export type WebhookSubscription = typeof webhookSubscriptions.$inferSelect;
+export type OutboundDelivery = typeof outboundDeliveries.$inferSelect;
 export type ApiKey = typeof apiKeys.$inferSelect;
 export type EventType = (typeof eventTypeEnum.enumValues)[number];
 export type StageKind = (typeof stageKindEnum.enumValues)[number];
