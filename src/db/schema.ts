@@ -221,6 +221,10 @@ export const messageStatusEnum = pgEnum('message_status', [
   'sent',
   'delivered',
   'read',
+  // Se registro en el CRM pero no salio a Instagram: no hay cuenta con token.
+  // Es un estado propio a proposito. Llamarlo 'sent' hacia que la bandeja y el
+  // historial del lead afirmaran que el mensaje llego cuando nunca salio.
+  'simulated',
   'failed',
 ]);
 

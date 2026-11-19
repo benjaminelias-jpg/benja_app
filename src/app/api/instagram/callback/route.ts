@@ -59,14 +59,23 @@ export async function GET(request: NextRequest) {
   let expiresIn = exchanged.expiresInSeconds;
 
   // El token de instagram_login dura 1 hora: hay que cambiarlo por el de 60 dias.
+  //
+  // Si este canje falla no se puede seguir como si nada: antes se guardaba la
+  // cuenta igual, en verde, con el token de 1 hora y el cartel «Cuenta
+  // conectada». Sesenta minutos despues todo dejaba de andar sin que nadie
+  // hubiera visto un error, y la renovacion automatica tampoco salvaba nada
+  // porque necesita un token largo para funcionar. Mejor fallar ahora, que es
+  // cuando la persona esta mirando la pantalla y puede reintentar.
   if (method === 'instagram_login') {
     const longLived = await exchangeForLongLived(token, credentials.appSecret);
-    if (longLived.ok && longLived.accessToken) {
-      token = longLived.accessToken;
-      expiresIn = longLived.expiresInSeconds;
-    } else {
+    if (!longLived.ok || !longLived.accessToken) {
       console.warn('[instagram] no se pudo extender el token:', longLived.error);
+      return back(
+        `Instagram autorizo la cuenta pero no entrego el token de larga duracion: ${longLived.error ?? 'sin detalle'}. Suele ser el App Secret mal pegado. Revisalo y conectá de nuevo.`,
+      );
     }
+    token = longLived.accessToken;
+    expiresIn = longLived.expiresInSeconds;
   }
 
   const connected = await connectAccount({

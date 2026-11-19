@@ -840,33 +840,40 @@ async function deliverDm(
     channel: 'ig_dm',
     body: text,
     automatedBy: automation.id,
-    status: result.ok ? 'sent' : 'failed',
+    status: result.dryRun ? 'simulated' : result.ok ? 'sent' : 'failed',
     error: result.ok ? null : (result.error ?? null),
     externalId: result.data?.message_id ?? null,
   });
 
-  if (conversationId) {
-    await db
-      .update(conversations)
-      .set({
-        lastMessageAt: new Date(),
-        lastOutboundAt: new Date(),
-        lastMessagePreview: text.slice(0, 140),
-      })
-      .where(eq(conversations.id, conversationId));
-  }
+  // Un envio que Meta rechazo no es un envio. La fila de `messages` ya queda en
+  // 'failed', pero el evento y el preview del hilo se escribian igual: el
+  // timeline del lead decia "Mensaje enviado", la atribucion lo contaba y los
+  // webhooks salientes suscritos a dm_sent se disparaban por un DM que nunca
+  // llego. El mismo bloque en inbox.ts ya estaba protegido asi.
+  if (result.ok) {
+    if (conversationId) {
+      await db
+        .update(conversations)
+        .set({
+          lastMessageAt: new Date(),
+          lastOutboundAt: new Date(),
+          lastMessagePreview: text.slice(0, 140),
+        })
+        .where(eq(conversations.id, conversationId));
+    }
 
-  await recordEvent({
-    orgId: context.orgId,
-    leadId: context.lead.id,
-    contentId: context.content?.id ?? null,
-    keywordId: context.keyword?.id ?? null,
-    automationId: automation.id,
-    type: stepType === 'send_resource' ? 'resource_sent' : 'dm_sent',
-    channel: 'ig_dm',
-    source: context.source ?? 'automation',
-    payload: { text, dryRun: result.dryRun },
-  });
+    await recordEvent({
+      orgId: context.orgId,
+      leadId: context.lead.id,
+      contentId: context.content?.id ?? null,
+      keywordId: context.keyword?.id ?? null,
+      automationId: automation.id,
+      type: stepType === 'send_resource' ? 'resource_sent' : 'dm_sent',
+      channel: 'ig_dm',
+      source: context.source ?? 'automation',
+      payload: { text, dryRun: result.dryRun },
+    });
+  }
 
   return {
     status: result.ok ? 'done' : 'failed',
@@ -875,8 +882,34 @@ async function deliverDm(
   };
 }
 
-/** Credenciales de la cuenta de Instagram de la organizacion. */
+/**
+ * Credenciales utilizables de la cuenta de Instagram de la organizacion.
+ *
+ * Antes esto leia la fila y devolvia `{ token: account.accessToken, ... }` sin
+ * mirar si habia token. Desconectar la cuenta no borra la fila: la deja con
+ * `accessToken: null`. El objeto devuelto seguia siendo truthy, asi que los
+ * guards `if (!auth)` de la bandeja y de los flujos no se disparaban nunca
+ * justo en el caso para el que estaban escritos, y mas adentro el cliente de
+ * Graph veia un token nulo y entraba en modo simulado devolviendo ok: los DMs
+ * quedaban guardados como enviados sin haber salido.
+ *
+ * Delegar en ensureFreshToken arregla eso y de paso trae la renovacion del
+ * token de 60 dias al camino caliente: antes solo se renovaba si alguien
+ * apretaba a mano los botones de importar, asi que una cuenta que solo recibia
+ * webhooks se moria sola a los 60 dias.
+ *
+ * El import es dinamico a proposito: instagram-sync -> inbox -> automations ya
+ * es una cadena, y un import estatico cerraria el ciclo.
+ */
 export async function authFor(orgId: string): Promise<IgAuth | null> {
+  // Primero, credenciales de verdad: ensureFreshToken exige cuenta conectada
+  // CON token y ademas renueva el de 60 dias si esta por vencer. Antes esa
+  // renovacion solo ocurria si alguien apretaba a mano los botones de importar,
+  // asi que una cuenta que solo recibia webhooks se moria sola a los 60 dias.
+  const { ensureFreshToken } = await import('./instagram-sync');
+  const fresh = await ensureFreshToken(orgId);
+  if (fresh) return fresh;
+
   const db = await getDb();
   const [account] = await db
     .select()
@@ -885,6 +918,19 @@ export async function authFor(orgId: string): Promise<IgAuth | null> {
     .orderBy(desc(instagramAccounts.connected))
     .limit(1);
   if (!account) return null;
+
+  // Hay fila pero no sirve. Hay que separar dos casos que antes se trataban
+  // igual y no son lo mismo:
+  //
+  //  - La cuenta NO figura conectada: es el modo simulado documentado. La
+  //    pantalla ya dice "Falta autorizar" y "Modo simulado", asi que dejamos
+  //    correr el embudo entero para poder probarlo. Lo que sale de aca lleva
+  //    token nulo y graphRequest lo marca como dryRun.
+  //  - La cuenta SI figura conectada pero se quedo sin token utilizable (lo
+  //    revocaron, vencio, fallo la renovacion): ahi la persona cree que esta
+  //    en vivo. Simular en silencio es la mentira peligrosa, asi que cortamos.
+  if (account.connected) return null;
+
   return {
     token: account.accessToken,
     igUserId: account.igUserId,

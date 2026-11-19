@@ -294,7 +294,7 @@ export async function sendReply(params: {
       direction: 'outbound',
       channel: 'ig_dm',
       body: text,
-      status: result.ok ? 'sent' : 'failed',
+      status: result.dryRun ? 'simulated' : result.ok ? 'sent' : 'failed',
       error: result.ok ? null : (result.error ?? null),
       externalId: result.data?.message_id ?? null,
     })
@@ -376,7 +376,7 @@ export async function sendMediaReply(params: {
       body: params.caption ?? null,
       mediaUrl: params.url,
       attachments: [{ type: params.type, url: params.url }],
-      status: result.ok ? 'sent' : 'failed',
+      status: result.dryRun ? 'simulated' : result.ok ? 'sent' : 'failed',
       error: result.ok ? null : (result.error ?? null),
       externalId: result.data?.message_id ?? null,
     })

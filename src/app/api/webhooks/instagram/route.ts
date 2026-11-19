@@ -3,7 +3,7 @@ import { env } from '@/lib/env';
 import { verifyMetaSignature } from '@/lib/crypto';
 import { getCurrentOrg } from '@/server/context';
 import { getMetaCredentials } from '@/server/integrations/instagram-oauth';
-import { ingestInteraction } from '@/server/services/ingest';
+import { ingestInteraction, recordReaction } from '@/server/services/ingest';
 import { completeDelivery, headersToObject, logDelivery } from '@/server/services/webhooks';
 
 export const runtime = 'nodejs';
@@ -127,11 +127,60 @@ export async function POST(request: NextRequest) {
         // Acuse de lectura: no es un mensaje, no debe crear eventos.
         if (messaging.read) continue;
 
-        // Reaccion a un mensaje: se registra como evento, sin texto.
+        // Reaccion a un mensaje: se registra como evento, sin texto. Antes el
+        // comentario decia esto pero el codigo solo empujaba un objeto vacio.
         if (messaging.reaction) {
-          results.push({ leadId: '', type: 'reaction' });
+          const leadId = await recordReaction({
+            orgId: org.id,
+            igUserId: senderId,
+            emoji: messaging.reaction.emoji ?? messaging.reaction.reaction ?? null,
+            action: messaging.reaction.action ?? null,
+            messageExternalId: messaging.reaction.mid ?? null,
+            occurredAt: messaging.timestamp ? new Date(messaging.timestamp) : undefined,
+          });
+          if (leadId) results.push({ leadId, type: 'reaction' });
           continue;
         }
+
+        // Boton: ice breaker, postback de plantilla o boton de menu. No trae
+        // `message`, asi que antes caia en la rama de DM con texto null y
+        // terminaba creando un lead vacio, sin mensaje y sin atribucion.
+        if (messaging.postback) {
+          const result = await ingestInteraction({
+            orgId: org.id,
+            source: 'ig_dm',
+            text: messaging.postback.title ?? null,
+            igUserId: senderId,
+            messageExternalId: messaging.postback.mid ?? null,
+            // El payload del boton es el valor exacto que configuro el flujo.
+            quickReplyPayload: messaging.postback.payload ?? null,
+            occurredAt: messaging.timestamp ? new Date(messaging.timestamp) : undefined,
+          });
+          results.push({ leadId: result.lead.id, type: 'postback' });
+          continue;
+        }
+
+        // Referral: entro por un link con ?ref= o por un anuncio click-to-DM.
+        // Tampoco trae `message`; el dato que importa es el ref.
+        const referral = messaging.referral ?? messaging.message?.referral;
+        if (referral && !messaging.message?.text) {
+          const result = await ingestInteraction({
+            orgId: org.id,
+            source: 'ig_dm',
+            text: null,
+            igUserId: senderId,
+            refCode: referral.ref ?? null,
+            customFields: referral.ad_id ? { ig_ad_id: referral.ad_id } : undefined,
+            occurredAt: messaging.timestamp ? new Date(messaging.timestamp) : undefined,
+          });
+          results.push({ leadId: result.lead.id, type: 'referral' });
+          continue;
+        }
+
+        // Cualquier otro tipo de evento de mensajeria que Meta agregue: si no
+        // trae mensaje no hay nada que ingerir. Antes se colaba igual y creaba
+        // un lead sin conversacion, indistinguible de uno real.
+        if (!messaging.message) continue;
 
         const storyId = messaging.message?.reply_to?.story?.id;
         const attachments = messaging.message?.attachments ?? [];
@@ -161,7 +210,7 @@ export async function POST(request: NextRequest) {
 
     await completeDelivery(delivery.id, {
       status: results.length > 0 ? 'processed' : 'ignored',
-      leadId: results[0]?.leadId ?? null,
+      leadId: results.find((r) => r.leadId)?.leadId ?? null,
       durationMs: Date.now() - startedAt,
     });
 
@@ -258,10 +307,13 @@ interface InstagramWebhookBody {
         is_echo?: boolean;
         attachments?: Array<{ type?: string; payload?: { url?: string } }>;
         quick_reply?: { payload?: string };
+        referral?: { ref?: string; source?: string; type?: string; ad_id?: string };
         reply_to?: { mid?: string; story?: { id?: string; url?: string } };
       };
       read?: { mid?: string };
       reaction?: { mid?: string; action?: string; reaction?: string; emoji?: string };
+      postback?: { mid?: string; title?: string; payload?: string };
+      referral?: { ref?: string; source?: string; type?: string; ad_id?: string };
     }>;
   }>;
 }

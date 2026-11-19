@@ -41,6 +41,9 @@ export function ThreadMessages({ messages }: { messages: ThreadMessage[] }) {
         {messages.map((message) => {
           const outbound = message.direction === 'outbound';
           const failed = message.status === 'failed';
+          // Simulado: quedo en el CRM pero nunca salio a Instagram. Tiene que
+          // distinguirse a simple vista de uno que si llego.
+          const simulated = message.status === 'simulated';
           return (
             <li
               key={message.id}
@@ -48,7 +51,18 @@ export function ThreadMessages({ messages }: { messages: ThreadMessage[] }) {
                 'max-w-[78%] rounded-2xl px-3.5 py-2',
                 outbound ? 'ml-auto rounded-br-sm text-white' : 'rounded-bl-sm bg-surface hairline',
               )}
-              style={outbound ? { background: failed ? 'var(--critical)' : 'var(--series-1)' } : undefined}
+              style={
+                outbound
+                  ? {
+                      background: failed
+                        ? 'var(--critical)'
+                        : simulated
+                          ? 'var(--surface-2)'
+                          : 'var(--series-1)',
+                      color: simulated ? 'var(--ink)' : undefined,
+                    }
+                  : undefined
+              }
             >
               {message.mediaUrl ? <Attachment url={message.mediaUrl} type={message.mediaType} /> : null}
               {message.body ? (
@@ -59,12 +73,13 @@ export function ThreadMessages({ messages }: { messages: ThreadMessage[] }) {
               <p
                 className={clsx(
                   'mt-1 flex items-center gap-1.5 text-[10px]',
-                  outbound ? 'text-white/75' : 'text-muted',
+                  outbound && !simulated ? 'text-white/75' : 'text-muted',
                 )}
               >
                 {formatDateTime(message.sentAt)}
                 {message.automated ? ' · automático' : ''}
                 {failed ? ` · no se envió: ${message.error ?? 'error'}` : ''}
+                {simulated ? ' · simulado, no salió a Instagram' : ''}
               </p>
             </li>
           );

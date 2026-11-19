@@ -65,16 +65,23 @@ export function Composer({
   const busy = pending || mediaPending || uploading;
   const error = state.error ?? mediaState.error ?? uploadError;
 
+  // La dependencia es el objeto entero, no `state.ok`.
+  //
+  // Entre dos envios exitosos seguidos `state.ok` va de true a true: la
+  // dependencia no cambia, el efecto no vuelve a correr y el textarea queda
+  // con el texto ya enviado. La persona cree que no salio y lo manda de nuevo,
+  // y el lead recibe el mismo mensaje dos veces. La accion devuelve un objeto
+  // nuevo en cada envio, asi que su identidad si cambia siempre.
   useEffect(() => {
     if (state.ok) setText('');
-  }, [state.ok]);
+  }, [state]);
 
   useEffect(() => {
     if (mediaState.ok) {
       setAttachment(null);
       if (fileRef.current) fileRef.current.value = '';
     }
-  }, [mediaState.ok]);
+  }, [mediaState]);
 
   async function upload(file: File) {
     const limit = LIMITS[kind];

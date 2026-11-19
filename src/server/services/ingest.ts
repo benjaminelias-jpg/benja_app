@@ -208,7 +208,13 @@ export async function ingestInteraction(input: IngestInteractionInput): Promise<
       // flujo configuro, y no cambia aunque se reescriba el titulo del boton.
       const result = await resumeAutomation(wait.id, input.quickReplyPayload ?? input.text, lead);
       automationRunId = result?.runId ?? null;
-      resumed = true;
+      // Solo cuenta como reanudado si de verdad se reanudo algo. resumeAutomation
+      // devuelve null cuando la automatizacion fue borrada o desactivada, o
+      // cuando el nodo ya no existe porque alguien edito el flujo; y 'skipped'
+      // cuando la espera habia vencido. En esos casos no hay conversacion en
+      // curso que deba ganarle a la palabra clave: darlo por reanudado se comia
+      // el mensaje del lead y el recurso no se entregaba nunca.
+      resumed = Boolean(result) && result?.status !== 'skipped';
     }
   }
 
@@ -293,6 +299,53 @@ function interactionEventType(source: LeadSource) {
 /* ------------------------------------------------------------------ *
  * Conversiones entrantes
  * ------------------------------------------------------------------ */
+
+/**
+ * Reaccion a un DM nuestro (el lead responde con un emoji).
+ *
+ * No es un mensaje: no crea lead, no dispara keywords y no abre conversacion.
+ * Pero tampoco debe desaparecer, que es lo que pasaba antes: el webhook la
+ * empujaba a un array con `leadId: ''` y no tocaba la base. Ese string vacio
+ * ademas viajaba hasta la FK de webhook_deliveries y reventaba la entrega con
+ * un error de SQL sin relacion con lo que habia pasado.
+ *
+ * Devuelve el id del lead si existia, o null si la reaccion vino de alguien de
+ * quien no tenemos registro (no inventamos un lead por un emoji).
+ */
+export async function recordReaction(input: {
+  orgId: string;
+  igUserId: string;
+  emoji?: string | null;
+  action?: string | null;
+  messageExternalId?: string | null;
+  occurredAt?: Date;
+}): Promise<string | null> {
+  const db = await getDb();
+  const [lead] = await db
+    .select()
+    .from(leads)
+    .where(and(eq(leads.orgId, input.orgId), eq(leads.igUserId, input.igUserId)))
+    .limit(1);
+  if (!lead) return null;
+
+  await recordEvent({
+    orgId: input.orgId,
+    leadId: lead.id,
+    contentId: lead.firstTouchContentId ?? null,
+    type: 'custom',
+    channel: 'ig_dm',
+    source: 'ig_reaction',
+    payload: {
+      kind: 'reaction',
+      emoji: input.emoji ?? null,
+      action: input.action ?? null,
+      mid: input.messageExternalId ?? null,
+    },
+    occurredAt: input.occurredAt,
+  });
+
+  return lead.id;
+}
 
 export interface IngestConversionInput {
   orgId: string;

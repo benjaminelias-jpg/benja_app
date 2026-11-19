@@ -48,7 +48,10 @@ beforeAll(async () => {
     orgId,
     igUserId: 'IG_ACCOUNT_1',
     username: 'cuenta.test',
-    connected: true,
+    // Sin token es modo simulado: el embudo corre entero y los DM quedan
+    // marcados 'simulated'. Ponerle connected: true sin token seria la misma
+    // mentira que tenia el seed.
+    connected: false,
   });
 
   const [pipeline] = await db

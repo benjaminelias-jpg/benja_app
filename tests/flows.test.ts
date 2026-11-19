@@ -46,7 +46,7 @@ beforeAll(async () => {
   await db.insert(users).values({ orgId, name: 'Closer', email: 'c@test.com', role: 'closer' });
   await db
     .insert(instagramAccounts)
-    .values({ orgId, igUserId: 'IG_CUENTA', username: 'cuenta', connected: true });
+    .values({ orgId, igUserId: 'IG_CUENTA', username: 'cuenta', connected: false });
 
   const [pipeline] = await db
     .insert(pipelines)
