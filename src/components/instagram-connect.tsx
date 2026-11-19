@@ -145,155 +145,161 @@ export function InstagramConnect({
     );
   }
 
-  /* ---------------- Todavía sin conectar ---------------- */
-  return (
-    <div className="space-y-4">
-      {/* Paso 1 */}
-      <Step n={1} title="Creá tu app en Meta (una sola vez)">
-        <p className="text-xs text-ink-2">
-          Meta exige que la conexión salga de una app tuya: no hay forma de pedirle permisos a una
-          cuenta sin eso. Se hace una vez y queda.
-        </p>
+  /* ---------------- Ya hay app de Meta: un solo boton ---------------- */
+  if (hasCredentials && !showForm) {
+    return (
+      <div className="space-y-3">
         <a
-          href="https://developers.facebook.com/apps/create/"
-          target="_blank"
-          rel="noreferrer"
-          className="mt-2 inline-block rounded-lg bg-surface-2 px-3 py-1.5 text-xs font-medium text-ink-2 hairline hover:text-ink"
+          href="/api/instagram/connect"
+          className="inline-flex h-10 items-center rounded-lg px-4 text-sm font-medium text-white"
+          style={{ background: 'var(--series-1)' }}
         >
-          Abrir el panel de Meta ↗
+          Iniciar sesión con Instagram
         </a>
-        <p className="mt-2 text-[11px] text-muted">
-          Elegí tipo <strong>Business</strong>, agregá el producto <strong>Instagram</strong> y pegá
-          esta dirección en <em>OAuth redirect URIs</em>:
+        <p className="text-xs text-ink-2">
+          Te lleva a Instagram, aceptás los permisos y volvés acá con la cuenta conectada.
         </p>
-        <div className="mt-1.5">
-          <CopyField value={redirectUri} />
-        </div>
-      </Step>
 
-      {/* Paso 2 */}
-      <Step n={2} title="Pegá las credenciales">
-        {hasCredentials && !showForm ? (
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            <span className="text-ink-2">
-              Cargadas{credentialsSource === 'entorno' ? ' por variables de entorno' : ''} · app{' '}
-              <code className="rounded bg-surface-2 px-1">{appId}</code>
+        <details className="group">
+          <summary className="cursor-pointer list-none text-[11px] text-muted hover:text-ink">
+            Configuración avanzada
+          </summary>
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted">
+            <span>
+              App de Meta <code className="rounded bg-surface-2 px-1">{appId}</code>
+              {credentialsSource === 'entorno' ? ' (por variables de entorno)' : ''}
             </span>
-            <button type="button" onClick={() => setEditing(true)} className="text-[11px] text-muted hover:text-ink">
+            <button type="button" onClick={() => setEditing(true)} className="hover:text-ink">
               Cambiar
             </button>
             {credentialsSource === 'base' ? (
               <form action={forgetMetaAppAction}>
-                <button type="submit" className="text-[11px] text-muted hover:text-ink">
+                <button type="submit" className="hover:text-ink">
                   Borrar
                 </button>
               </form>
             ) : null}
           </div>
-        ) : (
-          <form action={save} className="space-y-2">
-            <fieldset className="mb-1">
-              <legend className="mb-1 text-[11px] text-muted">Tipo de app</legend>
-              {(['instagram_login', 'unified_login'] as const).map((value) => (
-                <label key={value} className="mr-3 inline-flex items-center gap-1.5 text-xs text-ink-2">
-                  <input
-                    type="radio"
-                    name="method"
-                    value={value}
-                    checked={method === value}
-                    onChange={() => setMethod(value)}
-                  />
-                  {METHOD_LABEL[value]}
-                </label>
-              ))}
-            </fieldset>
-
-            <label className="block">
-              <span className="mb-1 block text-[11px] text-muted">
-                {method === 'unified_login' ? 'Meta App ID' : 'Instagram App ID'}
-              </span>
-              <input name="appId" required placeholder="1234567890123456" className={input} />
-            </label>
-
-            <label className="block">
-              <span className="mb-1 block text-[11px] text-muted">
-                {method === 'unified_login' ? 'Meta App Secret' : 'Instagram App Secret'}
-              </span>
-              <input name="appSecret" required type="password" placeholder="••••••••" className={input} />
-            </label>
-
-            {method === 'unified_login' ? (
-              <label className="block">
-                <span className="mb-1 block text-[11px] text-muted">Config ID</span>
-                <input name="configId" placeholder="De la configuración de Facebook Login" className={input} />
-              </label>
-            ) : null}
-
-            {state.error ? (
-              <p className="text-xs" style={{ color: 'var(--critical)' }}>
-                {state.error}
-              </p>
-            ) : null}
-
-            <div className="flex items-center gap-2">
-              <button
-                type="submit"
-                disabled={saving}
-                className="h-9 rounded-lg px-3 text-sm font-medium text-white disabled:opacity-50"
-                style={{ background: 'var(--series-1)' }}
-              >
-                {saving ? 'Guardando…' : 'Guardar'}
-              </button>
-              {editing ? (
-                <button type="button" onClick={() => setEditing(false)} className="text-xs text-ink-2 hover:text-ink">
-                  Cancelar
-                </button>
-              ) : null}
-            </div>
-            <p className="text-[10px] text-muted">
-              Se guardan en tu base de datos. No hace falta redesplegar ni tocar variables.
-            </p>
-          </form>
-        )}
-      </Step>
-
-      {/* Paso 3 */}
-      <Step n={3} title="Iniciá sesión y aceptá los permisos">
-        {hasCredentials ? (
-          <>
-            <a
-              href="/api/instagram/connect"
-              className="inline-block rounded-lg px-4 py-2 text-sm font-medium text-white"
-              style={{ background: 'var(--series-1)' }}
-            >
-              Conectar Instagram
-            </a>
-            <p className="mt-2 text-[11px] text-muted">
-              Te lleva a Instagram, iniciás sesión y aceptás. Volvés acá con la cuenta conectada.
-            </p>
-          </>
-        ) : (
-          <p className="text-xs text-muted">Primero cargá las credenciales del paso 2.</p>
-        )}
-      </Step>
-    </div>
-  );
-}
-
-function Step({ n, title, children }: { n: number; title: string; children: React.ReactNode }) {
-  return (
-    <div className="flex gap-3">
-      <span
-        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold text-white"
-        style={{ background: 'var(--ramp-4)' }}
-        aria-hidden
-      >
-        {n}
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className="mb-1.5 text-sm font-medium text-ink">{title}</p>
-        {children}
+        </details>
       </div>
+    );
+  }
+
+  /* ---------------- Configuracion inicial: una sola vez ---------------- */
+  return (
+    <div className="space-y-3">
+      <div>
+        <p className="text-sm font-medium text-ink">Configuración inicial</p>
+        <p className="mt-0.5 text-xs text-ink-2">
+          Se hace una sola vez. Después, conectar una cuenta es un botón.
+        </p>
+      </div>
+
+      <p className="text-xs text-ink-2">
+        Instagram no deja que una app ajena le pida permisos a tu cuenta: la conexión tiene que
+        salir de una app tuya. Creala y pegá sus dos claves acá abajo.
+      </p>
+
+      <ol className="space-y-2 text-xs text-ink-2">
+        <li className="flex gap-2">
+          <span className="text-muted">1.</span>
+          <span>
+            <a
+              href="https://developers.facebook.com/apps/create/"
+              target="_blank"
+              rel="noreferrer"
+              className="underline underline-offset-2 hover:text-ink"
+            >
+              Creá la app en Meta ↗
+            </a>{' '}
+            — tipo <strong>Business</strong>, y agregale el producto <strong>Instagram</strong>.
+          </span>
+        </li>
+        <li className="flex gap-2">
+          <span className="text-muted">2.</span>
+          <span className="min-w-0 flex-1">
+            Pegá esta dirección en <em>OAuth redirect URIs</em>:
+            <span className="mt-1 block">
+              <CopyField value={redirectUri} />
+            </span>
+          </span>
+        </li>
+        <li className="flex gap-2">
+          <span className="text-muted">3.</span>
+          <span>Copiá de ahí el App ID y el App Secret:</span>
+        </li>
+      </ol>
+
+      <form action={save} className="space-y-2">
+        <input type="hidden" name="method" value={method} />
+
+        <label className="block">
+          <span className="mb-1 block text-[11px] text-muted">
+            {method === 'unified_login' ? 'Meta App ID' : 'Instagram App ID'}
+          </span>
+          <input name="appId" required placeholder="1234567890123456" className={input} />
+        </label>
+
+        <label className="block">
+          <span className="mb-1 block text-[11px] text-muted">
+            {method === 'unified_login' ? 'Meta App Secret' : 'Instagram App Secret'}
+          </span>
+          <input name="appSecret" required type="password" placeholder="••••••••" className={input} />
+        </label>
+
+        {method === 'unified_login' ? (
+          <label className="block">
+            <span className="mb-1 block text-[11px] text-muted">Config ID</span>
+            <input name="configId" placeholder="De la configuración de Facebook Login" className={input} />
+          </label>
+        ) : null}
+
+        {state.error ? (
+          <p className="text-xs" style={{ color: 'var(--critical)' }}>
+            {state.error}
+          </p>
+        ) : null}
+
+        <div className="flex items-center gap-2 pt-0.5">
+          <button
+            type="submit"
+            disabled={saving}
+            className="h-10 rounded-lg px-4 text-sm font-medium text-white disabled:opacity-50"
+            style={{ background: 'var(--series-1)' }}
+          >
+            {saving ? 'Guardando…' : 'Guardar y conectar'}
+          </button>
+          {editing ? (
+            <button type="button" onClick={() => setEditing(false)} className="text-xs text-ink-2 hover:text-ink">
+              Cancelar
+            </button>
+          ) : null}
+        </div>
+
+        <p className="text-[10px] text-muted">
+          Quedan guardadas en tu base. Al guardar te mandamos derecho al login de Instagram.
+        </p>
+
+        <details>
+          <summary className="cursor-pointer list-none text-[11px] text-muted hover:text-ink">
+            Mi app usa Facebook Login for Business
+          </summary>
+          <div className="mt-1.5 text-[11px] text-ink-2">
+            {(['instagram_login', 'unified_login'] as const).map((value) => (
+              <label key={value} className="mr-3 inline-flex items-center gap-1.5">
+                <input
+                  type="radio"
+                  name="methodPicker"
+                  value={value}
+                  checked={method === value}
+                  onChange={() => setMethod(value)}
+                />
+                {METHOD_LABEL[value]}
+              </label>
+            ))}
+          </div>
+        </details>
+      </form>
     </div>
   );
 }

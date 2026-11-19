@@ -117,7 +117,8 @@ async function main() {
     username: 'benja.escala',
     name: 'Benja | Escala tu infoproducto',
     followersCount: 48_300,
-    connected: true,
+    // Sin token no hay conexion: la demo lo dice en vez de fingirla.
+    connected: false,
     webhookVerifyToken: 'hookcrm-dev-verify',
     lastSyncedAt: new Date(),
   });

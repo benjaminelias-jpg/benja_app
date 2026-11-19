@@ -1,6 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
+import { redirect } from 'next/navigation';
 import { and, eq } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { webhookEndpoints, webhookSubscriptions, metaApps, instagramAccounts } from '@/db/schema';
@@ -262,7 +263,10 @@ export async function saveMetaAppAction(
     .onConflictDoUpdate({ target: metaApps.orgId, set: values });
 
   revalidatePath('/integraciones');
-  return { ok: true };
+  // Guardar las credenciales no es una tarea en si: lo unico que el usuario
+  // queria era conectar la cuenta. Lo mandamos derecho al login de Instagram
+  // en vez de devolverlo a la pantalla para que apriete otro boton.
+  redirect('/api/instagram/connect');
 }
 
 export async function forgetMetaAppAction() {

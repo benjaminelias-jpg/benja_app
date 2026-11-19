@@ -46,6 +46,9 @@ export default async function IntegracionesPage({
   // Simulado = no hay token real con que llamar a Graph, o alguien forzo el
   // interruptor. Antes esto miraba una variable de entorno que ya no se usa.
   const simulated = env.forceDryRun || !account?.accessToken;
+  // Una cuenta sin token no puede hacer nada: mostrarla como "Conectada" fue
+  // justo lo que hizo que la pantalla se contradijera consigo misma.
+  const cuentaUsable = Boolean(account?.connected && account.accessToken);
 
   return (
     <div className="space-y-5">
@@ -76,8 +79,8 @@ export default async function IntegracionesPage({
 
           {account ? (
             <div className="mb-3 flex flex-wrap items-center gap-2">
-              <Badge color={account.connected ? 'var(--good)' : 'var(--warning)'}>
-                {account.connected ? 'Conectada' : 'Pendiente'}
+              <Badge color={cuentaUsable ? 'var(--good)' : 'var(--warning)'}>
+                {cuentaUsable ? 'Conectada' : 'Falta autorizar'}
               </Badge>
               <span className="text-sm text-ink">@{account.username}</span>
               <span className="text-xs text-muted">
@@ -90,7 +93,7 @@ export default async function IntegracionesPage({
             account={
               account
                 ? {
-                    connected: account.connected,
+                    connected: cuentaUsable,
                     username: account.username,
                     method: account.connectionMethod,
                     scopes: account.scopes,
@@ -109,19 +112,29 @@ export default async function IntegracionesPage({
           />
 
           <div className="mt-4 border-t border-[var(--grid)] pt-3">
-          <Field label="Redirect URI a registrar en Meta" value={redirectUri()} />
-          <Field label="URL de callback del webhook" value={`${base}/api/webhooks/instagram`} />
-          <Field label="Verify token" value={env.metaVerifyToken} />
-          <Field
-            label="Campos a suscribir"
-            value="comments, messages, mentions, message_reactions"
-          />
-          <p className="mt-3 text-xs text-muted">
-            En la app de Meta, apunta el webhook a esa URL. El handshake GET responde solo si el
-            token coincide; cada POST se valida con la firma{' '}
-            <code className="rounded bg-surface-2 px-1">X-Hub-Signature-256</code> usando el App
-            Secret que guardaste en el paso 2.
-          </p>
+          {/* Datos que solo hacen falta mientras configuras la app en Meta.
+              Fuera de ese rato son ruido, asi que viven plegados. */}
+          <details>
+            <summary className="cursor-pointer list-none text-xs text-muted hover:text-ink">
+              Datos técnicos del webhook
+            </summary>
+            <div className="mt-2">
+              <Field label="Redirect URI a registrar en Meta" value={redirectUri()} />
+              <Field label="URL de callback del webhook" value={`${base}/api/webhooks/instagram`} />
+              <Field label="Verify token" value={env.metaVerifyToken} />
+              <Field
+                label="Campos a suscribir"
+                value="comments, messages, mentions, message_reactions"
+              />
+              <p className="mt-3 text-xs text-muted">
+                Al conectar la cuenta la suscribimos solos. Esto es por si preferís hacerlo a mano
+                desde el panel de Meta: el handshake GET responde solo si el token coincide, y cada
+                POST se valida con la firma{' '}
+                <code className="rounded bg-surface-2 px-1">X-Hub-Signature-256</code> usando tu App
+                Secret.
+              </p>
+            </div>
+          </details>
           {simulated ? (
             <p
               className="mt-3 flex items-start gap-2 rounded-lg px-3 py-2 text-xs"
