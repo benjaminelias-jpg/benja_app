@@ -6,7 +6,7 @@
  */
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { env } from '../lib/env';
+import { env, hardenSslMode } from '../lib/env';
 
 export async function migrate(): Promise<void> {
   const folder = 'drizzle';
@@ -19,7 +19,7 @@ export async function migrate(): Promise<void> {
       import('pg'),
     ]);
     const Pool = pgModule.default?.Pool ?? pgModule.Pool;
-    const pool = new Pool({ connectionString: url });
+    const pool = new Pool({ connectionString: hardenSslMode(url) });
     await run(drizzle(pool), { migrationsFolder: folder });
     await pool.end();
     console.log(

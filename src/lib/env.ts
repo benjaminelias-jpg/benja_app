@@ -2,6 +2,18 @@
  * Configuracion por entorno. Todo tiene un valor por defecto que funciona
  * en local sin configurar nada: la app arranca con PGlite y sin tokens de Meta.
  */
+/**
+ * Fuerza la verificacion completa del certificado en la cadena de conexion.
+ *
+ * `pg` trata hoy `sslmode=require` como `verify-full`, pero avisa que en su
+ * proxima version mayor pasara a la semantica de libpq, donde `require` cifra
+ * SIN verificar el certificado: eso aceptaria a un intermediario. Dejarlo
+ * explicito congela el comportamiento seguro ante esa actualizacion.
+ */
+export function hardenSslMode(url: string): string {
+  return url.replace(/([?&]sslmode=)(require|prefer|verify-ca)\b/i, '$1verify-full');
+}
+
 export const env = {
   get databaseUrl(): string | undefined {
     const url = process.env.DATABASE_URL?.trim();

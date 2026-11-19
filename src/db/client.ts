@@ -2,7 +2,7 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import * as schema from './schema';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { env } from '../lib/env';
+import { env, hardenSslMode } from '../lib/env';
 
 export type Db = NodePgDatabase<typeof schema>;
 
@@ -26,7 +26,7 @@ async function createClient(): Promise<Db> {
     ]);
     const Pool = pgModule.default?.Pool ?? pgModule.Pool;
     const pool = new Pool({
-      connectionString: url,
+      connectionString: hardenSslMode(url),
       // En serverless cada instancia abre su propio pool: diez conexiones por
       // instancia se multiplican rapido. El pooler del proveedor es quien
       // reparte de verdad, aqui alcanza con poco y soltar lo que no se usa.

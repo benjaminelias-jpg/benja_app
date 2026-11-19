@@ -157,3 +157,34 @@ describe('plantillas de automatizacion', () => {
     expect(text).toBe('Facturas: 3k');
   });
 });
+
+describe('modo SSL de la conexion', () => {
+  it('eleva require/prefer/verify-ca a verify-full', async () => {
+    const { hardenSslMode } = await import('@/lib/env');
+
+    // `pg` hoy trata require como verify-full, pero avisa que va a cambiar a la
+    // semantica de libpq, donde require cifra sin verificar el certificado.
+    expect(hardenSslMode('postgres://u:p@h/db?sslmode=require')).toBe(
+      'postgres://u:p@h/db?sslmode=verify-full',
+    );
+    expect(hardenSslMode('postgres://u:p@h/db?a=1&sslmode=prefer')).toBe(
+      'postgres://u:p@h/db?a=1&sslmode=verify-full',
+    );
+    expect(hardenSslMode('postgres://u:p@h/db?sslmode=verify-ca&b=2')).toBe(
+      'postgres://u:p@h/db?sslmode=verify-full&b=2',
+    );
+  });
+
+  it('no toca lo que ya es seguro ni lo que se desactivo a proposito', async () => {
+    const { hardenSslMode } = await import('@/lib/env');
+    // `disable` se deja como esta: si alguien lo puso, fue a proposito
+    // (un Postgres local sin TLS), y romperlo seria peor.
+    for (const url of [
+      'postgres://u:p@h/db?sslmode=verify-full',
+      'postgres://u:p@h/db?sslmode=disable',
+      'postgres://u:p@h/db',
+    ]) {
+      expect(hardenSslMode(url)).toBe(url);
+    }
+  });
+});
