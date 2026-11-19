@@ -172,12 +172,25 @@ export async function registerTouch(params: {
     })
     .where(eq(leads.id, params.leadId));
 
-  if (!isFirst) {
-    await db
-      .update(leads)
-      .set({ firstTouchContentId: sql`coalesce(${leads.firstTouchContentId}, ${params.contentId})` })
-      .where(eq(leads.id, params.leadId));
-  }
+  // El relleno posterior tiene que cubrir tambien la keyword.
+  //
+  // Antes solo se completaba firstTouchContentId. firstTouchKeywordId se
+  // escribia unicamente en el INSERT de upsertLead, asi que cualquier lead que
+  // ya existia antes de disparar la palabra clave quedaba con ese campo en
+  // null para siempre. getKeywordPerformance atribuye las ventas por ese
+  // campo: la keyword mostraba "trae leads pero no vende", que se lee como un
+  // problema del gancho y era un agujero del registro.
+  await db
+    .update(leads)
+    .set({
+      firstTouchContentId: sql`coalesce(${leads.firstTouchContentId}, ${params.contentId})`,
+      ...(params.keywordId
+        ? {
+            firstTouchKeywordId: sql`coalesce(${leads.firstTouchKeywordId}, ${params.keywordId})`,
+          }
+        : {}),
+    })
+    .where(eq(leads.id, params.leadId));
 }
 
 /** Historial de eventos de un lead, del mas reciente al mas antiguo. */

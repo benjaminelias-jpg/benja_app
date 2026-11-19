@@ -11,6 +11,8 @@ import {
   stages,
   users,
   leads,
+  contents,
+  keywords,
   type Automation,
   type AutomationStep,
   type Content,
@@ -302,11 +304,26 @@ export async function resumeAutomation(
 
   const [freshLead] = await db.select().from(leads).where(eq(leads.id, lead.id)).limit(1);
 
+  // La espera guarda contentId y keywordId justamente para esto, y nadie los
+  // leia: al reanudar, todo paso posterior a un ask_question renderizaba
+  // {{link}} y {{recurso}} vacios. renderTemplate mapea esas claves a '' en vez
+  // de dejar el {{...}} a la vista, asi que el DM salia con un hueco en el
+  // medio y se marcaba como enviado igual. Ademas los eventos quedaban sin
+  // atribucion, que es lo que todo este CRM existe para no perder.
+  const [waitContent] = wait.contentId
+    ? await db.select().from(contents).where(eq(contents.id, wait.contentId)).limit(1)
+    : [];
+  const [waitKeyword] = wait.keywordId
+    ? await db.select().from(keywords).where(eq(keywords.id, wait.keywordId)).limit(1)
+    : [];
+
   const context: AutomationContext = {
     orgId: wait.orgId,
     lead: freshLead ?? lead,
     text: reply,
     source: 'resume',
+    content: waitContent ?? undefined,
+    keyword: waitKeyword ?? undefined,
   };
 
   const runId = wait.runId ?? '';
@@ -556,7 +573,13 @@ async function executeStep(
 
       const sent = await deliverDm(text, context, automation, step.type, options);
       if (sent.status === 'failed' || sent.status === 'skipped') {
-        return { ...base, status: sent.status, detail: sent.detail, dryRun: sent.dryRun };
+        // Para ask_question, no haber podido preguntar es un fallo, no un paso
+        // que se saltea. Si devolvieramos 'skipped', walk() seguiria de largo:
+        // no quedaria ninguna espera registrada y el `condition` de mas abajo
+        // evaluaria una respuesta vacia, mandando al lead por la rama
+        // equivocada con la ejecucion marcada en verde.
+        const status = step.type === 'ask_question' ? 'failed' : sent.status;
+        return { ...base, status, detail: sent.detail, dryRun: sent.dryRun };
       }
 
       if (step.type === 'ask_question') {

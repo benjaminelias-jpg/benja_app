@@ -359,8 +359,14 @@ export function buildMcpServer(org: Organization): McpServer {
       inputSchema: { leadId: z.string(), etiquetas: z.array(z.string()).min(1) },
     },
     async ({ leadId, etiquetas }) => {
+      // addTags busca el lead solo por id, sin mirar la organizacion, y
+      // devuelve void: no distingue "etiquete" de "no habia lead". Sin este
+      // guard la herramienta contestaba "Etiquetas agregadas" siempre, incluso
+      // etiquetando leads de otra cuenta. Sus vecinas ya validaban asi.
+      const row = await getLead(org.id, leadId);
+      if (!row) return texto(`No existe el lead ${leadId}.`);
       await addTags(leadId, etiquetas);
-      return texto(`Etiquetas agregadas: ${etiquetas.join(', ')}.`);
+      return texto(`Etiquetas agregadas a ${row.lead.fullName ?? leadId}: ${etiquetas.join(', ')}.`);
     },
   );
 
@@ -444,6 +450,10 @@ export function buildMcpServer(org: Organization): McpServer {
       if (Number.isNaN(scheduledAt.getTime())) {
         return texto(`"${cuando}" no es una fecha válida. Usá formato ISO 8601.`);
       }
+      // bookMeeting no filtra por organizacion: con el id de otra cuenta
+      // insertaba la cita igual, con nuestro orgId encima de su lead.
+      const row = await getLead(org.id, leadId);
+      if (!row) return texto(`No existe el lead ${leadId}.`);
       const appointment = await bookMeeting({
         orgId: org.id,
         leadId,

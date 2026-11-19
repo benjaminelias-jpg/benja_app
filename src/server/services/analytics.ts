@@ -541,24 +541,45 @@ export async function getCloserPerformance(orgId: string, range: DateRange): Pro
   const db = await getDb();
   const rows = await rawRows<Record<string, string | number | null>>(
     db,
+    // Cada metrica va en su propia subconsulta a proposito.
+    //
+    // Antes esto eran dos LEFT JOIN independientes desde users, y eso arma un
+    // producto cartesiano: cada deal aparece una vez por cada appointment del
+    // mismo closer en el rango. Los conteos zafaban porque usaban
+    // count(DISTINCT ...), pero SUM(amount_cents) no es DISTINCT, asi que la
+    // plata se multiplicaba por la cantidad de reuniones. Tres reuniones y una
+    // venta de $1.000 reportaban $3.000, y el closeRate seguia dando bien, asi
+    // que no habia nada que se viera raro.
     sql`
       SELECT
         u.id   AS user_id,
         u.name AS name,
-        count(DISTINCT a.id) FILTER (WHERE a.status = 'held') AS meetings_held,
-        count(DISTINCT d.id) FILTER (WHERE d.status = 'won')  AS sales,
-        COALESCE(SUM(d.amount_cents) FILTER (WHERE d.status = 'won'), 0) AS revenue_cents
+        (
+          SELECT count(*)
+          FROM appointments a
+          WHERE a.owner_id = u.id
+            AND a.status = 'held'
+            AND a.scheduled_at >= ${range.from.toISOString()}
+            AND a.scheduled_at <= ${range.to.toISOString()}
+        ) AS meetings_held,
+        (
+          SELECT count(*)
+          FROM deals d
+          WHERE d.owner_id = u.id
+            AND d.status = 'won'
+            AND d.closed_at >= ${range.from.toISOString()}
+            AND d.closed_at <= ${range.to.toISOString()}
+        ) AS sales,
+        (
+          SELECT COALESCE(SUM(d.amount_cents), 0)
+          FROM deals d
+          WHERE d.owner_id = u.id
+            AND d.status = 'won'
+            AND d.closed_at >= ${range.from.toISOString()}
+            AND d.closed_at <= ${range.to.toISOString()}
+        ) AS revenue_cents
       FROM users u
-      LEFT JOIN appointments a
-        ON a.owner_id = u.id
-       AND a.scheduled_at >= ${range.from.toISOString()}
-       AND a.scheduled_at <= ${range.to.toISOString()}
-      LEFT JOIN deals d
-        ON d.owner_id = u.id
-       AND d.closed_at >= ${range.from.toISOString()}
-       AND d.closed_at <= ${range.to.toISOString()}
       WHERE u.org_id = ${orgId} AND u.active = true
-      GROUP BY u.id, u.name
       ORDER BY revenue_cents DESC
     `,
   );

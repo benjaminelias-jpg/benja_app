@@ -3,6 +3,7 @@ import { getDb } from '@/db/client';
 import {
   leads,
   appointments,
+  deals,
   messages,
   type Content,
   type Keyword,
@@ -11,7 +12,7 @@ import {
 } from '@/db/schema';
 import { recordEvent, registerTouch } from './events';
 import { upsertLead } from './leads';
-import { bookMeeting, recordSale, setMeetingOutcome } from './commerce';
+import { bookMeeting, recordSale, recordRefund, setMeetingOutcome } from './commerce';
 import {
   resolveContent,
   findMatchingKeyword,
@@ -379,12 +380,39 @@ export interface IngestConversionInput {
  * Si el lead no existe se crea, porque es preferible un lead sin contenido
  * atribuido a perder la venta del reporte.
  */
+/**
+ * El que llama mando un leadId que no existe en su cuenta.
+ *
+ * Tiene su propio tipo para que la API publica pueda responder 400 y no 500:
+ * con 500, ManyChat y Make reintentan para siempre un dato que nunca va a
+ * estar bien.
+ */
+export class UnknownLeadError extends Error {
+  readonly code = 'unknown_lead';
+}
+
 export async function ingestConversion(input: IngestConversionInput) {
   const db = await getDb();
 
   let lead: Lead | undefined;
   if (input.leadId) {
-    [lead] = await db.select().from(leads).where(eq(leads.id, input.leadId)).limit(1);
+    // El filtro por organizacion no es decorativo: esta funcion la llama la
+    // API publica /api/v1/conversions, que usan ManyChat, Make y el checkout.
+    // Sin el, un leadId de otra cuenta le escribia la venta encima a su lead.
+    [lead] = await db
+      .select()
+      .from(leads)
+      .where(and(eq(leads.id, input.leadId), eq(leads.orgId, input.orgId)))
+      .limit(1);
+
+    // Y si mandaron un leadId que no existe (o es de otro entorno), antes se
+    // creaba un lead fantasma en silencio y se devolvia ok con OTRO id: la
+    // venta quedaba cargada sobre un lead que nadie habia visto nunca.
+    if (!lead) {
+      throw new UnknownLeadError(
+        `No existe el lead ${input.leadId} en esta cuenta. Revisá el id, o mandá la identidad (igUserId, email) en vez del leadId.`,
+      );
+    }
   }
 
   if (!lead) {
@@ -462,6 +490,35 @@ export async function ingestConversion(input: IngestConversionInput) {
     }
 
     case 'refund': {
+      // Era el unico caso que no llamaba a su funcion de commerce: solo
+      // grababa un evento con valor negativo. El deal quedaba en 'won' con el
+      // monto entero y el revenue del lead sin tocar, asi que la plata
+      // devuelta se seguia reportando como venta en todo lo que mira deals.
+      const [dealGanado] = await db
+        .select()
+        .from(deals)
+        .where(and(eq(deals.leadId, lead.id), eq(deals.status, 'won')))
+        .orderBy(desc(deals.closedAt))
+        .limit(1);
+
+      if (dealGanado) {
+        // recordRefund ya graba el evento de refund, con el deal y el
+        // contenido correctos. Grabarlo aca tambien seria contarlo dos veces.
+        await recordRefund({
+          dealId: dealGanado.id,
+          amountCents: input.amountCents ?? undefined,
+          occurredAt: input.occurredAt,
+        });
+        const [actualizado] = await db
+          .select()
+          .from(deals)
+          .where(eq(deals.id, dealGanado.id))
+          .limit(1);
+        return { lead, appointment: null, deal: actualizado ?? null };
+      }
+
+      // Sin venta previa que revertir: queda el evento, que es lo unico
+      // honesto que se puede hacer con una devolucion sin deal.
       await recordEvent({
         orgId: input.orgId,
         leadId: lead.id,

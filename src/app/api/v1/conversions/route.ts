@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { ingestConversion } from '@/server/services/ingest';
+import { ingestConversion, UnknownLeadError } from '@/server/services/ingest';
 import { badRequest, isResponse, requireAuth, serverError } from '@/server/api/respond';
 
 export const runtime = 'nodejs';
@@ -84,6 +84,8 @@ export async function POST(request: NextRequest) {
       attributedContentId: result.deal?.contentId ?? result.appointment?.contentId ?? null,
     });
   } catch (error) {
+    // Un leadId que no existe es un error del que llama, no nuestro.
+    if (error instanceof UnknownLeadError) return badRequest(error.message);
     return serverError(error);
   }
 }

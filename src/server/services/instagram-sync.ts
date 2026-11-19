@@ -266,17 +266,37 @@ export async function syncMedia(orgId: string, limit = 25): Promise<SyncOutcome>
         .where(and(eq(contents.orgId, orgId), eq(contents.igMediaId, item.id)))
         .limit(1);
 
+      // Las metricas solo se escriben si Meta las devolvio.
+      //
+      // Antes, si /insights fallaba, `metrics` quedaba en {} y todos los
+      // contadores se armaban en 0. Para un contenido ya importado ese 0 se
+      // escribia encima de las views historicas: el reel que habia hecho
+      // 50.000 views quedaba en cero y la atribucion lo daba por muerto. Y el
+      // error se tragaba con un ternario, asi que la sincronizacion devolvia
+      // verde perfecto.
+      const metricas = insights.ok
+        ? {
+            views: metrics.views ?? metrics.plays ?? metrics.impressions ?? 0,
+            reach: metrics.reach ?? 0,
+            shares: metrics.shares ?? 0,
+            saves: metrics.saved ?? 0,
+          }
+        : {};
+
+      if (!insights.ok) {
+        outcome.errors.push(
+          `No se pudieron leer las metricas de ${item.id}: ${insights.error ?? 'sin detalle'}. Se conservaron las anteriores.`,
+        );
+      }
+
       const fromInstagram = {
         caption: item.caption ?? null,
         permalink: item.permalink ?? null,
         thumbnailUrl: item.thumbnail_url ?? item.media_url ?? null,
         publishedAt: item.timestamp ? new Date(item.timestamp) : null,
-        views: metrics.views ?? metrics.plays ?? metrics.impressions ?? 0,
-        reach: metrics.reach ?? 0,
         likes: item.like_count ?? metrics.likes ?? 0,
         commentsCount: item.comments_count ?? metrics.comments ?? 0,
-        shares: metrics.shares ?? 0,
-        saves: metrics.saved ?? 0,
+        ...metricas,
         updatedAt: new Date(),
       };
 

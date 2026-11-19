@@ -272,7 +272,26 @@ export async function attemptDelivery(deliveryId: string): Promise<void> {
     .from(webhookSubscriptions)
     .where(eq(webhookSubscriptions.id, delivery.subscriptionId))
     .limit(1);
-  if (!subscription || !subscription.active) return;
+  // Una suscripcion pausada o borrada no se reintenta nunca mas.
+  //
+  // Antes esto era un `return` seco: la entrega quedaba en 'pending' con el
+  // nextAttemptAt vencido, o sea elegible para siempre. El cron la levantaba
+  // en cada corrida sin intentar nada y reportaba exito igual, porque el
+  // numero que devuelve es la cantidad de filas que leyo. En pantalla se veia
+  // "pendiente" sin motivo, indefinidamente.
+  if (!subscription || !subscription.active) {
+    await db
+      .update(outboundDeliveries)
+      .set({
+        status: 'exhausted',
+        error: subscription
+          ? 'La suscripcion esta pausada: la entrega no se reintenta.'
+          : 'La suscripcion ya no existe.',
+        nextAttemptAt: null,
+      })
+      .where(eq(outboundDeliveries.id, delivery.id));
+    return;
+  }
 
   const attempt = delivery.attempts + 1;
   const startedAt = Date.now();
