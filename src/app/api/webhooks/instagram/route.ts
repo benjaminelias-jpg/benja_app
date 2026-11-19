@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { env } from '@/lib/env';
 import { verifyMetaSignature } from '@/lib/crypto';
 import { getCurrentOrg } from '@/server/context';
+import { getMetaCredentials } from '@/server/integrations/instagram-oauth';
 import { ingestInteraction } from '@/server/services/ingest';
 import { completeDelivery, headersToObject, logDelivery } from '@/server/services/webhooks';
 
@@ -36,11 +37,15 @@ export async function POST(request: NextRequest) {
   const rawBody = await request.text();
   const headers = headersToObject(request.headers);
 
-  if (env.metaAppSecret) {
+  // El secreto sale del entorno o de la app de Meta que el usuario guardo desde
+  // /integraciones. Si no hay ninguno no hay con que validar y se acepta la
+  // entrega: es el estado del primer arranque, antes de cargar credenciales.
+  const appSecret = await webhookAppSecret();
+  if (appSecret) {
     const valid = verifyMetaSignature(
       rawBody,
       request.headers.get('x-hub-signature-256'),
-      env.metaAppSecret,
+      appSecret,
     );
     if (!valid) {
       return NextResponse.json({ error: 'Firma invalida' }, { status: 401 });
@@ -259,4 +264,16 @@ interface InstagramWebhookBody {
       reaction?: { mid?: string; action?: string; reaction?: string; emoji?: string };
     }>;
   }>;
+}
+
+/** App Secret con el que validar la firma: entorno primero, base despues. */
+async function webhookAppSecret(): Promise<string | undefined> {
+  if (env.metaAppSecret) return env.metaAppSecret;
+  try {
+    const org = await getCurrentOrg();
+    const credentials = await getMetaCredentials(org.id);
+    return credentials.appSecret || undefined;
+  } catch {
+    return undefined;
+  }
 }

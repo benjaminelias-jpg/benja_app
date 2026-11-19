@@ -228,12 +228,16 @@ Campos a suscribir: `comments`, `messages`, `mentions`.
 
 El handshake `GET` responde solo si `hub.verify_token` coincide con
 `META_VERIFY_TOKEN`. Cada `POST` se valida con la firma `X-Hub-Signature-256`
-cuando hay `META_APP_SECRET`. El endpoint procesa comentarios, DMs, respuestas a
-stories y menciones, e ignora los ecos de los mensajes propios.
+usando el App Secret: el de `META_APP_SECRET` si existe y, si no, el que se
+guardó desde `/integraciones`. El endpoint procesa comentarios, DMs, respuestas
+a stories y menciones, e ignora los ecos de los mensajes propios.
 
-**Sin `INSTAGRAM_ACCESS_TOKEN` la app entra en modo simulado:** los DMs se
-registran en el CRM y aparecen en el historial del lead, pero no salen a
+**Mientras no haya una cuenta conectada la app está en modo simulado:** los DMs
+se registran en el CRM y aparecen en el historial del lead, pero no salen a
 Instagram. Sirve para probar el embudo completo sin conectar una cuenta real.
+En cuanto conectás la cuenta desde `/integraciones`, su token queda en la base
+y los envíos salen de verdad — no hace falta ninguna variable de entorno ni un
+redespliegue.
 
 ### ManyChat
 

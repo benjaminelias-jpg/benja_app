@@ -54,7 +54,7 @@ async function graphRequest<T>(
 ): Promise<IgResult<T>> {
   const token = auth.token ?? env.instagramToken;
 
-  if (!token || env.dryRunOutbound) {
+  if (!token || env.forceDryRun) {
     return { ok: true, dryRun: true, data: { simulated: true, path, body: init.body } as T };
   }
 

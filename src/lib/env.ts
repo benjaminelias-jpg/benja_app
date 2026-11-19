@@ -95,13 +95,12 @@ export const env = {
     return process.env.MANYCHAT_WEBHOOK_SECRET?.trim() || undefined;
   },
   /**
-   * Si no hay credenciales de Instagram, los envios se registran pero no salen
-   * a la red. Permite probar todo el flujo end-to-end sin cuenta conectada.
+   * Interruptor manual para no salir a la red aunque haya una cuenta conectada.
+   * El modo simulado normal NO depende de esto: si no hay token (ni el de la
+   * cuenta conectada ni el del entorno) el cliente de Graph ya simula solo.
    */
-  get dryRunOutbound(): boolean {
-    if (process.env.DRY_RUN_OUTBOUND === 'false') return false;
-    if (process.env.DRY_RUN_OUTBOUND === 'true') return true;
-    return !process.env.INSTAGRAM_ACCESS_TOKEN;
+  get forceDryRun(): boolean {
+    return process.env.DRY_RUN_OUTBOUND === 'true';
   },
   get isProduction(): boolean {
     return process.env.NODE_ENV === 'production';

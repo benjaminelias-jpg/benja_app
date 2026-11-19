@@ -43,6 +43,9 @@ export default async function IntegracionesPage({
 
   const base = env.appUrl;
   const account = accounts[0];
+  // Simulado = no hay token real con que llamar a Graph, o alguien forzo el
+  // interruptor. Antes esto miraba una variable de entorno que ya no se usa.
+  const simulated = env.forceDryRun || !account?.accessToken;
 
   return (
     <div className="space-y-5">
@@ -116,10 +119,10 @@ export default async function IntegracionesPage({
           <p className="mt-3 text-xs text-muted">
             En la app de Meta, apunta el webhook a esa URL. El handshake GET responde solo si el
             token coincide; cada POST se valida con la firma{' '}
-            <code className="rounded bg-surface-2 px-1">X-Hub-Signature-256</code> cuando hay{' '}
-            <code className="rounded bg-surface-2 px-1">META_APP_SECRET</code>.
+            <code className="rounded bg-surface-2 px-1">X-Hub-Signature-256</code> usando el App
+            Secret que guardaste en el paso 2.
           </p>
-          {env.dryRunOutbound ? (
+          {simulated ? (
             <p
               className="mt-3 flex items-start gap-2 rounded-lg px-3 py-2 text-xs"
               style={{ background: 'var(--surface-2)' }}
@@ -129,9 +132,17 @@ export default async function IntegracionesPage({
                 <path d="M12 8v5M12 16h.01" />
               </svg>
               <span className="text-ink-2">
-                <strong>Modo simulado:</strong> sin{' '}
-                <code className="rounded bg-surface px-1">INSTAGRAM_ACCESS_TOKEN</code> los DMs se
-                registran en el CRM pero no salen a Instagram. Todo el embudo se puede probar igual.
+                <strong>Modo simulado:</strong>{' '}
+                {env.forceDryRun ? (
+                  <>
+                    <code className="rounded bg-surface px-1">DRY_RUN_OUTBOUND=true</code> esta
+                    forzando el modo simulado.
+                  </>
+                ) : (
+                  'hasta que conectes la cuenta de arriba'
+                )}{' '}
+                los DMs se registran en el CRM pero no salen a Instagram. Todo el embudo se puede
+                probar igual.
               </span>
             </p>
           ) : null}
