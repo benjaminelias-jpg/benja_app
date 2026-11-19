@@ -123,6 +123,8 @@ export default async function IntegracionesPage({
               <Field label="URL de callback del webhook" value={`${base}/api/webhooks/instagram`} />
               <Field label="URL de desautorización" value={`${base}/api/instagram/deauthorize`} />
               <Field label="URL de borrado de datos" value={`${base}/api/instagram/data-deletion`} />
+              <Field label="Política de privacidad" value={`${base}/privacidad`} />
+              <Field label="Condiciones del servicio" value={`${base}/terminos`} />
               <Field label="Verify token" value={env.metaVerifyToken} />
               <Field
                 label="Campos a suscribir"
