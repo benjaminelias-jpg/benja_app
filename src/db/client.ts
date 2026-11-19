@@ -27,8 +27,14 @@ async function createClient(): Promise<Db> {
     const Pool = pgModule.default?.Pool ?? pgModule.Pool;
     const pool = new Pool({
       connectionString: url,
-      max: 10,
-      ssl: url.includes('sslmode=require') ? { rejectUnauthorized: false } : undefined,
+      // En serverless cada instancia abre su propio pool: diez conexiones por
+      // instancia se multiplican rapido. El pooler del proveedor es quien
+      // reparte de verdad, aqui alcanza con poco y soltar lo que no se usa.
+      max: 5,
+      idleTimeoutMillis: 10_000,
+      connectionTimeoutMillis: 10_000,
+      // El `sslmode` de la cadena de conexion manda. No se desactiva la
+      // verificacion del certificado: hacerlo aceptaria un intermediario.
     });
     globalForDb.__hookCrmClose = async () => {
       await pool.end();

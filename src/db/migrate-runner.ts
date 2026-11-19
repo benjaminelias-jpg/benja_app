@@ -10,18 +10,21 @@ import { env } from '../lib/env';
 
 export async function migrate(): Promise<void> {
   const folder = 'drizzle';
+  const url = env.migrationDatabaseUrl;
 
-  if (env.databaseUrl) {
+  if (url) {
     const [{ drizzle }, { migrate: run }, pgModule] = await Promise.all([
       import('drizzle-orm/node-postgres'),
       import('drizzle-orm/node-postgres/migrator'),
       import('pg'),
     ]);
     const Pool = pgModule.default?.Pool ?? pgModule.Pool;
-    const pool = new Pool({ connectionString: env.databaseUrl });
+    const pool = new Pool({ connectionString: url });
     await run(drizzle(pool), { migrationsFolder: folder });
     await pool.end();
-    console.log('Migraciones aplicadas sobre Postgres remoto.');
+    console.log(
+      `Migraciones aplicadas sobre Postgres remoto${url === env.databaseUrl ? '' : ' (conexion directa, sin pooler)'}.`,
+    );
     return;
   }
 

@@ -7,6 +7,21 @@ export const env = {
     const url = process.env.DATABASE_URL?.trim();
     return url && url.length > 0 ? url : undefined;
   },
+  /**
+   * URL para las MIGRACIONES, no para la app.
+   *
+   * Los proveedores serverless dan dos: una a traves de un pooler (PgBouncer) y
+   * una directa. El pooler en modo transaccion no soporta todo el DDL —por
+   * ejemplo `ALTER TYPE ... ADD VALUE`, que esta migracion 0002 usa—, asi que
+   * las migraciones van por la directa cuando existe y la app por la pooled.
+   */
+  get migrationDatabaseUrl(): string | undefined {
+    const direct =
+      process.env.DATABASE_URL_UNPOOLED?.trim() ||
+      process.env.POSTGRES_URL_NON_POOLING?.trim();
+    return direct && direct.length > 0 ? direct : this.databaseUrl;
+  },
+
   get pgliteDataDir(): string {
     return process.env.PGLITE_DATA_DIR?.trim() || '.data/pgdata';
   },

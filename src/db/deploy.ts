@@ -16,8 +16,17 @@ async function main() {
     return;
   }
 
+  const { env } = await import('../lib/env');
+  const direct = env.migrationDatabaseUrl;
+
   const { migrate } = await import('./migrate-runner');
   await migrate();
+
+  // Todo el trabajo de base del build va por la conexion directa, igual que las
+  // migraciones: durante un build el pooler puede no estar listo, y son
+  // conexiones cortas que no necesitan reparto. En runtime la app vuelve a la
+  // pooled, que es lo correcto para serverless.
+  if (direct) process.env.DATABASE_URL = direct;
 
   const { bootstrap } = await import('./bootstrap');
   const result = await bootstrap();
