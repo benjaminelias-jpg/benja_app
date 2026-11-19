@@ -68,19 +68,39 @@ export async function connectAccount(params: {
     method: params.method,
   };
 
-  // El perfil confirma que el token sirve y nos da el id real de la cuenta.
-  const profile = params.igUserId
-    ? await getAccountProfile(auth)
-    : await getProfile(auth);
+  // Cual es el id que hay que guardar.
+  //
+  // El canje del codigo devuelve un "Instagram-scoped user ID": identifica al
+  // usuario frente a NUESTRA app y no sirve para mandar mensajes. El que hace
+  // falta es el Instagram Professional Account ID, que Meta documenta asi en
+  // /me?fields=user_id: "The Instagram professional acount ID, <IG_ID>, for
+  // your app user. This ID is value of the `id` field received in webhook
+  // notifications for this account."
+  //
+  // O sea: es el mismo id que llega en `entry.id` de los webhooks y el que va
+  // en la ruta de /<IG_ID>/messages. Guardar el otro deja los envios rotos.
+  const profile =
+    params.method === 'instagram_login' || !params.igUserId
+      ? await getProfile(auth)
+      : await getAccountProfile(auth);
 
   if (!profile.ok) {
     return { ok: false, error: profile.error ?? 'No se pudo leer el perfil de la cuenta.' };
   }
 
   const data = profile.data ?? {};
-  const igUserId = String(data.user_id ?? data.id ?? params.igUserId ?? '');
+  // En instagram_login exigimos user_id: caer al id con scope de app daria una
+  // conexion que parece sana y falla recien al mandar el primer DM.
+  const igUserId =
+    params.method === 'instagram_login'
+      ? String(data.user_id ?? '')
+      : String(data.user_id ?? data.id ?? params.igUserId ?? '');
   if (!igUserId) {
-    return { ok: false, error: 'Meta no devolvio el id de la cuenta de Instagram.' };
+    return {
+      ok: false,
+      error:
+        'Meta no devolvio el id profesional de la cuenta (user_id). Revisa que sea una cuenta de empresa o creador.',
+    };
   }
 
   const tokenExpiresAt = params.expiresInSeconds

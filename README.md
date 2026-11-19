@@ -216,6 +216,22 @@ Dos advertencias honestas:
   `graph.facebook.com` con el id de la cuenta de Instagram, que es lo que la
   documentación implica, pero no está confirmado por Meta.
 
+### Los dos ids de Instagram
+
+Meta devuelve dos identificadores distintos en este flujo y confundirlos deja
+los envíos rotos sin un solo error visible:
+
+| | De dónde sale | Para qué sirve |
+|---|---|---|
+| *Instagram-scoped user ID* | el canje del código, en `api.instagram.com/oauth/access_token` | identifica al usuario frente a **tu** app |
+| *Instagram professional account ID* (`<IG_ID>`) | `GET /me?fields=user_id` | es el que llega en `entry.id` de los webhooks y el que va en la ruta de `/<IG_ID>/messages` |
+
+La documentación de Meta lo dice del segundo: *"The Instagram professional
+acount ID, `<IG_ID>`, for your app user. This ID is value of the `id` field
+received in webhook notifications for this account"* (el error de tipeo es de
+ellos). Por eso `connectAccount()` pide el perfil a `/me` y exige `user_id`
+en el camino `instagram_login`, en vez de reusar el id del canje.
+
 ### Instagram (webhook de Meta)
 
 En la app de Meta, apuntá el webhook a:

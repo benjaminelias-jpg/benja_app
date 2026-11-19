@@ -42,7 +42,7 @@ describe('credenciales de salida', () => {
     expect(result.dryRun).toBe(false);
     expect(result.ok).toBe(true);
 
-    const [url, init] = fetchSpy.mock.calls[0] as [URL, RequestInit];
+    const [url, init] = fetchSpy.mock.calls[0] as unknown as [URL, RequestInit];
     expect(String(url)).toContain(`/${auth.igUserId}/messages`);
     expect((init.headers as Record<string, string>).authorization).toBe(`Bearer ${auth.token}`);
   });

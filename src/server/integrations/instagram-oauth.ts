@@ -118,6 +118,9 @@ export function buildAuthUrl(credentials: MetaCredentials, state: string): strin
   url.searchParams.set('redirect_uri', redirectUri());
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('scope', INSTAGRAM_LOGIN_SCOPES.join(','));
+  // Esconde el boton de "entrar con Facebook": la pantalla queda siendo el
+  // login de Instagram y nada mas, que es lo que la gente espera ver.
+  url.searchParams.set('enable_fb_login', 'false');
   url.searchParams.set('state', state);
   return url.toString();
 }
