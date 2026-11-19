@@ -108,6 +108,10 @@ export function buildAuthUrl(credentials: MetaCredentials, state: string): strin
     url.searchParams.set('config_id', credentials.configId ?? '');
     url.searchParams.set('redirect_uri', redirectUri());
     url.searchParams.set('response_type', 'code');
+    // Sin esto, Facebook Login for Business puede devolver el token en el
+    // fragmento de la URL en vez del code que esperamos. La propia URL que
+    // genera el panel de Meta lo incluye.
+    url.searchParams.set('override_default_response_type', 'true');
     url.searchParams.set('display', 'popup');
     url.searchParams.set('state', state);
     return url.toString();

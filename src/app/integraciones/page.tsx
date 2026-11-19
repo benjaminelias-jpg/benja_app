@@ -116,11 +116,13 @@ export default async function IntegracionesPage({
               Fuera de ese rato son ruido, asi que viven plegados. */}
           <details>
             <summary className="cursor-pointer list-none text-xs text-muted hover:text-ink">
-              Datos técnicos del webhook
+              Datos técnicos (para la app de Meta)
             </summary>
             <div className="mt-2">
               <Field label="Redirect URI a registrar en Meta" value={redirectUri()} />
               <Field label="URL de callback del webhook" value={`${base}/api/webhooks/instagram`} />
+              <Field label="URL de desautorización" value={`${base}/api/instagram/deauthorize`} />
+              <Field label="URL de borrado de datos" value={`${base}/api/instagram/data-deletion`} />
               <Field label="Verify token" value={env.metaVerifyToken} />
               <Field
                 label="Campos a suscribir"
