@@ -10,8 +10,21 @@ export const env = {
   get pgliteDataDir(): string {
     return process.env.PGLITE_DATA_DIR?.trim() || '.data/pgdata';
   },
+  /**
+   * URL publica de la app. De aqui salen las URLs de webhook y la del servidor
+   * MCP que se muestran en pantalla, asi que tiene que ser la real.
+   *
+   * En Vercel se deduce sola del dominio de produccion: una variable menos que
+   * configurar, y una menos que quede mal y rompa los webhooks.
+   */
   get appUrl(): string {
-    return process.env.APP_URL?.trim() || 'http://localhost:3000';
+    const explicit = process.env.APP_URL?.trim();
+    if (explicit) return explicit.replace(/\/$/, '');
+
+    const vercel = process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim();
+    if (vercel) return `https://${vercel}`;
+
+    return 'http://localhost:3000';
   },
   // --- Camino instagram_login (graph.instagram.com) ---
   get instagramAppId(): string | undefined {

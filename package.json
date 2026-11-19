@@ -21,7 +21,9 @@
     "test:watch": "vitest",
     "key:create": "tsx src/db/create-key.ts",
     "mcp": "tsx src/mcp/stdio.ts",
-    "webhooks:retry": "tsx src/db/retry-webhooks.ts"
+    "webhooks:retry": "tsx src/db/retry-webhooks.ts",
+    "db:bootstrap": "tsx src/db/bootstrap.ts",
+    "vercel-build": "tsx src/db/deploy.ts && next build"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.16",

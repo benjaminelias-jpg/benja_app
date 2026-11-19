@@ -389,6 +389,7 @@ que agenda 4 reus por día"*.
 | `npm run db:reset` | Borra todo y vuelve a sembrar |
 | `npm run db:generate` | Genera una migración SQL tras cambiar el esquema |
 | `npm run db:migrate` | Aplica las migraciones pendientes |
+| `npm run db:bootstrap` | Crea la organización y el pipeline si la base está vacía |
 | `npm run key:create -- "nombre"` | Crea una clave de API |
 | `npm run mcp` | Puente MCP por stdio (para Claude Desktop) |
 | `npm run webhooks:retry` | Reintenta las entregas salientes vencidas |
@@ -460,11 +461,25 @@ hacían lo mismo. Hay un test que cubre exactamente ese caso.)
 
 ## Llevarlo a producción
 
-1. Creá un Postgres (Neon, Supabase, RDS) y poné `DATABASE_URL`.
-2. `npm run db:migrate` contra esa base. Las migraciones de `./drizzle` son SQL
-   estándar de Postgres: las mismas que corren en local sobre PGlite.
-3. Desplegá en Vercel, Fly, Railway o un contenedor. No hay estado en disco
-   cuando usás `DATABASE_URL`.
+En Vercel alcanza con conectar el repo y agregar un Postgres: el proyecto trae
+un `vercel-build` que **migra la base y la deja lista antes de compilar**.
+
+1. Importá el repo en Vercel (framework Next.js, se detecta solo).
+2. Storage → crear una base Postgres y conectarla al proyecto. Queda disponible
+   como `DATABASE_URL`.
+3. Volvé a desplegar. El build corre `src/db/deploy.ts`, que aplica las
+   migraciones y crea la organización y el pipeline si la base está vacía.
+
+Sin `DATABASE_URL` el build **no falla**: despliega y la app explica qué falta,
+en vez de romperse entera por una variable sin configurar.
+
+`APP_URL` se deduce sola del dominio de producción de Vercel, así que las URLs
+de webhook y la del servidor MCP salen bien sin configurar nada.
+
+En otro proveedor (Fly, Railway, un contenedor) es lo mismo a mano:
+`npm run db:migrate && npm run db:bootstrap` y después `npm run build`. Las
+migraciones de `./drizzle` son SQL estándar de Postgres: las mismas que corren
+en local sobre PGlite.
 4. Configurá `META_APP_SECRET` y `MANYCHAT_WEBHOOK_SECRET`: sin ellos los
    webhooks aceptan cualquier payload.
 5. `npm run key:create` para cada integración externa.
