@@ -5,6 +5,7 @@ import { redirect } from 'next/navigation';
 import { getCurrentOrg } from '@/server/context';
 import {
   sendReply,
+  sendMediaReply,
   markAsRead,
   setConversationStatus,
   assignConversation,
@@ -33,6 +34,27 @@ export async function sendReplyAction(
 
   const org = await getCurrentOrg();
   const result = await sendReply({ orgId: org.id, conversationId, text });
+
+  if (!result.ok) return { error: result.error ?? 'No se pudo enviar.' };
+
+  revalidatePath(`/inbox/${conversationId}`);
+  revalidatePath('/inbox');
+  return { ok: true, dryRun: result.dryRun };
+}
+
+/** Envía un adjunto ya subido (o una URL pública) por el chat. */
+export async function sendMediaAction(
+  _previous: ComposerState,
+  formData: FormData,
+): Promise<ComposerState> {
+  const conversationId = String(formData.get('conversationId') ?? '');
+  const url = String(formData.get('url') ?? '').trim();
+  const type = String(formData.get('type') ?? 'file') as 'image' | 'audio' | 'video' | 'file';
+
+  if (!conversationId || !url) return { error: 'Falta el archivo.' };
+
+  const org = await getCurrentOrg();
+  const result = await sendMediaReply({ orgId: org.id, conversationId, type, url });
 
   if (!result.ok) return { error: result.error ?? 'No se pudo enviar.' };
 

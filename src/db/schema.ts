@@ -143,6 +143,11 @@ export const automationTriggerEnum = pgEnum('automation_trigger', [
 export const automationStepEnum = pgEnum('automation_step_type', [
   'send_dm',
   'send_image',
+  'send_audio',
+  'send_video',
+  'send_file',
+  /** Muestra "escribiendo..." antes del proximo mensaje. */
+  'typing',
   'reply_comment',
   'send_resource',
   /** Manda una pregunta y espera la respuesta del lead para seguir. */
@@ -691,6 +696,36 @@ export const automationWaits = pgTable(
 );
 
 /**
+ * Credenciales de la app de Meta.
+ *
+ * Viven en la base y no en variables de entorno a proposito: cambiarlas no
+ * deberia exigir un redespliegue. Conectar Instagram pasa a ser pegar dos
+ * valores una vez y apretar un boton.
+ */
+export const metaApps = pgTable(
+  'meta_apps',
+  {
+    id: text('id').primaryKey().$defaultFn(() => newId('app')),
+    orgId: text('org_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    /** Cual de los dos caminos de Meta usa esta app. */
+    method: connectionMethodEnum('method').notNull().default('instagram_login'),
+    appId: text('app_id').notNull(),
+    /** Secreto de la app. Nunca se devuelve entero a la interfaz. */
+    appSecret: text('app_secret').notNull(),
+    /** Solo para unified_login: id de la configuracion de Facebook Login. */
+    configId: text('config_id'),
+    /** Ultima validacion contra Meta, para avisar si las credenciales no sirven. */
+    verifiedAt: timestamp('verified_at', { withTimezone: true }),
+    lastError: text('last_error'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('meta_apps_org_idx').on(t.orgId)],
+);
+
+/**
  * Estado temporal del flujo OAuth de Instagram (proteccion CSRF).
  * Se borra al consumirse o al expirar.
  */
@@ -1076,6 +1111,7 @@ export type Conversation = typeof conversations.$inferSelect;
 export type NewConversation = typeof conversations.$inferInsert;
 export type AutomationWait = typeof automationWaits.$inferSelect;
 export type OAuthState = typeof oauthStates.$inferSelect;
+export type MetaApp = typeof metaApps.$inferSelect;
 export type ConnectionMethod = (typeof connectionMethodEnum.enumValues)[number];
 export type AutomationStepType = (typeof automationStepEnum.enumValues)[number];
 export type Appointment = typeof appointments.$inferSelect;

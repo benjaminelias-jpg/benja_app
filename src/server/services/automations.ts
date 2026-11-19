@@ -22,10 +22,15 @@ import { addTags, removeTags, assignOwner, setCustomFields, moveLeadToStage } fr
 import { bookMeeting, recordSale } from './commerce';
 import {
   sendText,
-  sendImage,
+  sendMedia,
   sendPrivateReply,
+  sendQuickReplies,
+  sendSenderAction,
   replyToComment,
+  validateMedia,
   type IgAuth,
+  type MediaType,
+  type QuickReply,
 } from '../integrations/instagram';
 import { addManychatTag, setManychatField } from '../integrations/manychat';
 
@@ -545,7 +550,11 @@ async function executeStep(
             : 'Hola {{nombre}}!';
       const text = renderTemplate((config.text as string) ?? fallback, context);
 
-      const sent = await deliverDm(text, context, automation, step.type);
+      // Botones de respuesta rapida: evitan tener que adivinar que quiso decir
+      // el lead, porque la respuesta vuelve como un valor exacto.
+      const options = toQuickReplies(config.quickReplies);
+
+      const sent = await deliverDm(text, context, automation, step.type, options);
       if (sent.status === 'failed' || sent.status === 'skipped') {
         return { ...base, status: sent.status, detail: sent.detail, dryRun: sent.dryRun };
       }
@@ -585,21 +594,52 @@ async function executeStep(
       return { ...base, status: 'done', detail: text.slice(0, 120), dryRun: sent.dryRun };
     }
 
-    case 'send_image': {
+    case 'send_image':
+    case 'send_audio':
+    case 'send_video':
+    case 'send_file': {
       const url = config.url as string | undefined;
-      if (!url) return { ...base, status: 'skipped', detail: 'Sin URL de imagen' };
+      const mediaType = STEP_MEDIA_TYPE[step.type] ?? 'file';
+      if (!url) return { ...base, status: 'skipped', detail: `Sin URL de ${mediaType}` };
+
+      // Se valida antes de llamar a Meta: un formato que no acepta falla con un
+      // error opaco y el mensaje queda guardado como si se hubiera enviado.
+      const problem = validateMedia(mediaType, url);
+      if (problem) return { ...base, status: 'failed', detail: problem };
+
       const auth = await authFor(context.orgId);
       if (!auth) return { ...base, status: 'skipped', detail: 'No hay cuenta de Instagram' };
       if (context.simulate) return { ...base, status: 'done', detail: url, dryRun: true };
 
-      const result = await sendImage(auth, {
+      const result = await sendMedia(auth, {
         recipientIgId: context.lead.igUserId ?? '',
-        imageUrl: url,
+        type: mediaType,
+        url,
       });
+
+      await recordMediaMessage(context, automation, mediaType, url, result.ok, result.error);
+
       return {
         ...base,
         status: result.ok ? 'done' : 'failed',
         detail: result.ok ? url : result.error,
+        dryRun: result.dryRun,
+      };
+    }
+
+    case 'typing': {
+      const auth = await authFor(context.orgId);
+      if (!auth) return { ...base, status: 'skipped', detail: 'No hay cuenta de Instagram' };
+      if (context.simulate) return { ...base, status: 'done', detail: 'escribiendo...', dryRun: true };
+
+      const result = await sendSenderAction(auth, {
+        recipientIgId: context.lead.igUserId ?? '',
+        action: (config.action as 'typing_on') ?? 'typing_on',
+      });
+      return {
+        ...base,
+        status: result.ok ? 'done' : 'failed',
+        detail: String(config.action ?? 'typing_on'),
         dryRun: result.dryRun,
       };
     }
@@ -767,6 +807,7 @@ async function deliverDm(
   context: AutomationContext,
   automation: Automation,
   stepType: AutomationStep['type'],
+  quickReplies: QuickReply[] = [],
 ): Promise<{ status: 'done' | 'failed' | 'skipped'; detail?: string; dryRun?: boolean }> {
   const db = await getDb();
   const auth = await authFor(context.orgId);
@@ -780,7 +821,13 @@ async function deliverDm(
   // el DM aunque el lead nunca haya escrito antes.
   const result = context.commentId
     ? await sendPrivateReply(auth, { commentId: context.commentId, text })
-    : await sendText(auth, { recipientIgId: context.lead.igUserId ?? '', text });
+    : quickReplies.length > 0
+      ? await sendQuickReplies(auth, {
+          recipientIgId: context.lead.igUserId ?? '',
+          text,
+          options: quickReplies,
+        })
+      : await sendText(auth, { recipientIgId: context.lead.igUserId ?? '', text });
 
   const conversationId = await ensureConversationId(context.orgId, context.lead.id, auth);
 
@@ -845,6 +892,12 @@ export async function authFor(orgId: string): Promise<IgAuth | null> {
   };
 }
 
+async function ensureConversationForLead(orgId: string, leadId: string): Promise<string | null> {
+  const auth = await authFor(orgId);
+  if (!auth) return null;
+  return ensureConversationId(orgId, leadId, auth);
+}
+
 async function ensureConversationId(
   orgId: string,
   leadId: string,
@@ -870,6 +923,74 @@ async function ensureConversationId(
     .onConflictDoNothing()
     .returning();
   return created?.id ?? null;
+}
+
+const STEP_MEDIA_TYPE: Partial<Record<AutomationStep['type'], MediaType>> = {
+  send_image: 'image',
+  send_audio: 'audio',
+  send_video: 'video',
+  send_file: 'file',
+};
+
+/** Normaliza la configuracion de botones, venga como lista o como texto. */
+function toQuickReplies(value: unknown): QuickReply[] {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        if (typeof item === 'string') return { title: item, payload: item };
+        const option = item as { title?: string; payload?: string };
+        if (!option.title) return null;
+        return { title: option.title, payload: option.payload || option.title };
+      })
+      .filter((item): item is QuickReply => item !== null);
+  }
+  if (typeof value === 'string') {
+    return value
+      .split(',')
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map((title) => ({ title, payload: title }));
+  }
+  return [];
+}
+
+/** Deja el adjunto enviado en el hilo, para que la bandeja lo muestre. */
+async function recordMediaMessage(
+  context: AutomationContext,
+  automation: Automation,
+  type: MediaType,
+  url: string,
+  ok: boolean,
+  error?: string,
+): Promise<void> {
+  const db = await getDb();
+  const conversationId = await ensureConversationForLead(context.orgId, context.lead.id);
+
+  await db.insert(messages).values({
+    orgId: context.orgId,
+    leadId: context.lead.id,
+    conversationId,
+    contentId: context.content?.id ?? null,
+    direction: 'outbound',
+    channel: 'ig_dm',
+    body: null,
+    mediaUrl: url,
+    attachments: [{ type, url }],
+    automatedBy: automation.id,
+    status: ok ? 'sent' : 'failed',
+    error: ok ? null : (error ?? null),
+  });
+
+  if (conversationId) {
+    await db
+      .update(conversations)
+      .set({
+        lastMessageAt: new Date(),
+        lastOutboundAt: new Date(),
+        lastMessagePreview: `(${type})`,
+      })
+      .where(eq(conversations.id, conversationId));
+  }
 }
 
 function toStringArray(value: unknown): string[] {

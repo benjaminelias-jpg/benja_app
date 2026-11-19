@@ -18,11 +18,25 @@ export function summarize(type: AutomationStepType, config: Record<string, unkno
   switch (type) {
     case 'send_dm':
     case 'send_resource':
-    case 'ask_question':
     case 'reply_comment':
       return String(config.text ?? '').slice(0, 90) || 'Sin texto';
+    case 'ask_question': {
+      const buttons = (config.quickReplies as Array<{ title?: string }>) ?? [];
+      const text = String(config.text ?? '').slice(0, 70) || 'Sin texto';
+      return buttons.length > 0
+        ? `${text}\n[${buttons.map((b) => b.title).filter(Boolean).join('] [')}]`
+        : text;
+    }
     case 'send_image':
-      return String(config.url ?? 'Sin imagen');
+    case 'send_audio':
+    case 'send_video':
+    case 'send_file': {
+      const url = String(config.url ?? '');
+      if (!url) return 'Sin archivo';
+      return url.split('/').pop()?.slice(0, 40) ?? url;
+    }
+    case 'typing':
+      return String(config.action ?? 'typing_on');
     case 'add_tag':
     case 'remove_tag':
       return Array.isArray(config.tags) ? config.tags.join(', ') : String(config.tags ?? '');

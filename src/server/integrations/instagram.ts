@@ -313,16 +313,179 @@ export function sendPrivateReply(
   });
 }
 
+/* ------------------------------------------------------------------ *
+ * Medios: imagen, audio, video y archivo
+ * ------------------------------------------------------------------ */
+
+export type MediaType = 'image' | 'audio' | 'video' | 'file';
+
+/**
+ * Limites de Meta por tipo de adjunto.
+ *
+ * Validar antes de enviar evita el peor caso: el mensaje se guarda en el CRM,
+ * la persona cree que lo mando, y la API lo rechaza sin que nadie se entere.
+ */
+export const MEDIA_LIMITS: Record<
+  MediaType,
+  { maxBytes: number; extensions: string[]; label: string }
+> = {
+  image: { maxBytes: 8 * 1024 * 1024, extensions: ['png', 'jpg', 'jpeg'], label: 'imagen' },
+  audio: {
+    maxBytes: 25 * 1024 * 1024,
+    extensions: ['aac', 'm4a', 'wav', 'mp4'],
+    label: 'audio',
+  },
+  video: {
+    maxBytes: 25 * 1024 * 1024,
+    extensions: ['mp4', 'ogg', 'avi', 'mov', 'webm'],
+    label: 'video',
+  },
+  file: { maxBytes: 25 * 1024 * 1024, extensions: ['pdf'], label: 'archivo' },
+};
+
+/** Deduce el tipo de adjunto por la extension del archivo. */
+export function mediaTypeFromUrl(url: string): MediaType | null {
+  const extension = url.split('?')[0].split('.').pop()?.toLowerCase();
+  if (!extension) return null;
+  // `mp4` sirve para audio y para video: sin mas contexto se asume video.
+  if (extension === 'mp4') return 'video';
+  for (const [type, limits] of Object.entries(MEDIA_LIMITS)) {
+    if (limits.extensions.includes(extension)) return type as MediaType;
+  }
+  return null;
+}
+
+/** Comprueba que la extension corresponda al tipo. Devuelve el motivo si no. */
+export function validateMedia(type: MediaType, url: string): string | null {
+  if (!/^https:\/\//i.test(url)) {
+    return 'Instagram solo acepta URLs públicas por HTTPS.';
+  }
+  const extension = url.split('?')[0].split('.').pop()?.toLowerCase() ?? '';
+  const limits = MEDIA_LIMITS[type];
+  if (extension && !limits.extensions.includes(extension)) {
+    return `Para ${limits.label} Instagram acepta ${limits.extensions.join(', ')}; esta URL termina en .${extension}.`;
+  }
+  return null;
+}
+
+/**
+ * Manda un adjunto por DM.
+ *
+ * Meta usa dos formas distintas y confundirlas hace que el envio falle sin
+ * explicacion: la imagen va en `attachments` (lista), y audio, video y archivo
+ * en `attachment` (objeto). Por eso el tipo decide la forma del cuerpo.
+ */
+export function sendMedia(
+  auth: IgAuth,
+  params: { recipientIgId: string; type: MediaType; url: string },
+): Promise<IgResult<SendResult>> {
+  const payload = { url: params.url };
+
+  const message =
+    params.type === 'image'
+      ? { attachments: [{ type: 'image', payload }] }
+      : { attachment: { type: params.type, payload } };
+
+  return graphRequest<SendResult>(auth, `/${auth.igUserId}/messages`, {
+    method: 'POST',
+    body: { recipient: { id: params.recipientIgId }, message },
+  });
+}
+
 export function sendImage(
   auth: IgAuth,
   params: { recipientIgId: string; imageUrl: string },
 ): Promise<IgResult<SendResult>> {
+  return sendMedia(auth, { recipientIgId: params.recipientIgId, type: 'image', url: params.imageUrl });
+}
+
+/** Nota de voz o pista de audio. Es lo que ManyChat manda como audio. */
+export function sendAudio(
+  auth: IgAuth,
+  params: { recipientIgId: string; url: string },
+): Promise<IgResult<SendResult>> {
+  return sendMedia(auth, { recipientIgId: params.recipientIgId, type: 'audio', url: params.url });
+}
+
+export function sendVideo(
+  auth: IgAuth,
+  params: { recipientIgId: string; url: string },
+): Promise<IgResult<SendResult>> {
+  return sendMedia(auth, { recipientIgId: params.recipientIgId, type: 'video', url: params.url });
+}
+
+export function sendFile(
+  auth: IgAuth,
+  params: { recipientIgId: string; url: string },
+): Promise<IgResult<SendResult>> {
+  return sendMedia(auth, { recipientIgId: params.recipientIgId, type: 'file', url: params.url });
+}
+
+/* ------------------------------------------------------------------ *
+ * Respuestas rapidas (botones)
+ * ------------------------------------------------------------------ */
+
+export interface QuickReply {
+  /** Texto del boton. Instagram lo corta a 20 caracteres. */
+  title: string;
+  /** Valor que vuelve por webhook cuando lo tocan. */
+  payload: string;
+}
+
+/** Tope de Meta: 13 botones por mensaje. */
+export const MAX_QUICK_REPLIES = 13;
+export const QUICK_REPLY_TITLE_LENGTH = 20;
+
+/**
+ * Mensaje con botones de respuesta rapida.
+ *
+ * Es lo que evita el peor problema de un flujo por DM: preguntar en texto libre
+ * y tener que adivinar que quiso decir el lead. Con botones, la respuesta vuelve
+ * como un valor exacto en `message.quick_reply.payload`.
+ *
+ * Instagram solo admite botones de texto plano, y los recorta a 20 caracteres,
+ * asi que conviene recortarlos aqui para que el titulo que se ve sea el mismo
+ * que se configuro.
+ */
+export function sendQuickReplies(
+  auth: IgAuth,
+  params: { recipientIgId: string; text: string; options: QuickReply[] },
+): Promise<IgResult<SendResult>> {
+  const quickReplies = params.options.slice(0, MAX_QUICK_REPLIES).map((option) => ({
+    content_type: 'text',
+    title: option.title.slice(0, QUICK_REPLY_TITLE_LENGTH),
+    payload: option.payload,
+  }));
+
   return graphRequest<SendResult>(auth, `/${auth.igUserId}/messages`, {
     method: 'POST',
     body: {
       recipient: { id: params.recipientIgId },
-      message: { attachments: [{ type: 'image', payload: { url: params.imageUrl } }] },
+      message: { text: truncateForDm(params.text), quick_replies: quickReplies },
     },
+  });
+}
+
+/* ------------------------------------------------------------------ *
+ * Acciones de remitente
+ * ------------------------------------------------------------------ */
+
+export type SenderAction = 'typing_on' | 'typing_off' | 'mark_seen';
+
+/**
+ * "Escribiendo..." y acuse de lectura.
+ *
+ * Un flujo que contesta al instante se nota automatico. Mostrar que la cuenta
+ * esta escribiendo antes de responder es lo que hace que no lo parezca, y es
+ * exactamente lo que hacen las herramientas de automatizacion.
+ */
+export function sendSenderAction(
+  auth: IgAuth,
+  params: { recipientIgId: string; action: SenderAction },
+): Promise<IgResult<SendResult>> {
+  return graphRequest<SendResult>(auth, `/${auth.igUserId}/messages`, {
+    method: 'POST',
+    body: { recipient: { id: params.recipientIgId }, sender_action: params.action },
   });
 }
 

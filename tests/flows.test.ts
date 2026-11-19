@@ -439,3 +439,127 @@ describe('fechas fuera de rango', () => {
     expect(result.lead.id).toBeDefined();
   });
 });
+
+describe('envío de medios', () => {
+  it('usa la forma de cuerpo que corresponde a cada tipo', async () => {
+    const { sendMedia } = await import('@/server/integrations/instagram');
+    const auth = { igUserId: 'IG_CUENTA', token: null, method: 'instagram_login' as const };
+
+    // Sin token el cliente simula y devuelve el cuerpo que habría enviado.
+    const imagen = await sendMedia(auth, {
+      recipientIgId: 'IG_1',
+      type: 'image',
+      url: 'https://x.com/a.jpg',
+    });
+    const audio = await sendMedia(auth, {
+      recipientIgId: 'IG_1',
+      type: 'audio',
+      url: 'https://x.com/a.m4a',
+    });
+
+    const cuerpoImagen = (imagen.data as { body: { message: Record<string, unknown> } }).body.message;
+    const cuerpoAudio = (audio.data as { body: { message: Record<string, unknown> } }).body.message;
+
+    // Meta usa `attachments` (lista) para imagen y `attachment` (objeto) para
+    // audio, video y archivo. Confundirlas hace que el envío falle sin explicación.
+    expect(Array.isArray(cuerpoImagen.attachments)).toBe(true);
+    expect(cuerpoImagen.attachment).toBeUndefined();
+
+    expect(cuerpoAudio.attachment).toBeDefined();
+    expect(cuerpoAudio.attachments).toBeUndefined();
+    expect((cuerpoAudio.attachment as { type: string }).type).toBe('audio');
+  });
+
+  it('rechaza formatos que Instagram no acepta, antes de llamar a la API', async () => {
+    const { validateMedia } = await import('@/server/integrations/instagram');
+
+    expect(validateMedia('audio', 'https://x.com/nota.m4a')).toBeNull();
+    expect(validateMedia('audio', 'https://x.com/nota.mp3')).toContain('aac');
+    expect(validateMedia('image', 'https://x.com/foto.gif')).toContain('png');
+    expect(validateMedia('file', 'https://x.com/doc.docx')).toContain('pdf');
+
+    // Meta descarga la URL: tiene que ser pública y por HTTPS.
+    expect(validateMedia('audio', 'http://x.com/nota.m4a')).toContain('HTTPS');
+  });
+
+  it('deduce el tipo por la extensión', async () => {
+    const { mediaTypeFromUrl } = await import('@/server/integrations/instagram');
+    expect(mediaTypeFromUrl('https://x.com/a.m4a')).toBe('audio');
+    expect(mediaTypeFromUrl('https://x.com/a.png')).toBe('image');
+    expect(mediaTypeFromUrl('https://x.com/a.pdf')).toBe('file');
+    expect(mediaTypeFromUrl('https://x.com/a.mov')).toBe('video');
+    expect(mediaTypeFromUrl('https://x.com/a.xyz')).toBeNull();
+    // Con parámetros de query la extensión igual se reconoce.
+    expect(mediaTypeFromUrl('https://x.com/a.wav?v=2')).toBe('audio');
+  });
+});
+
+describe('botones de respuesta rápida', () => {
+  it('respeta los límites de Instagram', async () => {
+    const { sendQuickReplies } = await import('@/server/integrations/instagram');
+    const auth = { igUserId: 'IG_CUENTA', token: null, method: 'instagram_login' as const };
+
+    const result = await sendQuickReplies(auth, {
+      recipientIgId: 'IG_1',
+      text: '¿Qué te interesa?',
+      options: Array.from({ length: 20 }, (_, i) => ({
+        title: `Opción muy larga número ${i}`,
+        payload: `op_${i}`,
+      })),
+    });
+
+    const message = (result.data as { body: { message: Record<string, unknown> } }).body.message;
+    const botones = message.quick_replies as Array<{ title: string; content_type: string }>;
+
+    // Meta corta en 13 botones y 20 caracteres de título.
+    expect(botones).toHaveLength(13);
+    expect(botones.every((b) => b.title.length <= 20)).toBe(true);
+    expect(botones.every((b) => b.content_type === 'text')).toBe(true);
+    expect(message.text).toBe('¿Qué te interesa?');
+  });
+
+  it('el payload del botón manda sobre el texto visible al reanudar', async () => {
+    const { ingestInteraction } = await import('@/server/services/ingest');
+
+    await ingestInteraction({
+      orgId,
+      source: 'ig_comment',
+      text: 'INFO',
+      igUserId: 'IG_BOTON',
+      igUsername: 'lead.boton',
+      igMediaId: 'MEDIA_F',
+      commentId: 'C_BOTON',
+      messageExternalId: 'C_BOTON',
+    });
+
+    // El lead toca un botón cuyo título NO contiene "factur" pero su payload sí.
+    // La condición mira el payload, así que debe tomar la rama "sí".
+    await ingestInteraction({
+      orgId,
+      source: 'ig_dm',
+      text: 'Sí, ya vendo',
+      quickReplyPayload: 'ya_facturo',
+      igUserId: 'IG_BOTON',
+      messageExternalId: 'DM_BOTON',
+    });
+
+    const [lead] = await db.select().from(leads).where(eq(leads.igUserId, 'IG_BOTON'));
+    expect(lead.tags).toContain('califica');
+    expect((lead.customFields as Record<string, unknown>).facturacion).toBe('ya_facturo');
+  });
+});
+
+describe('acciones de remitente', () => {
+  it('manda solo recipient y sender_action, sin message', async () => {
+    const { sendSenderAction } = await import('@/server/integrations/instagram');
+    const auth = { igUserId: 'IG_CUENTA', token: null, method: 'instagram_login' as const };
+
+    const result = await sendSenderAction(auth, { recipientIgId: 'IG_1', action: 'typing_on' });
+    const body = (result.data as { body: Record<string, unknown> }).body;
+
+    // Meta rechaza la petición si se mezcla con un mensaje.
+    expect(body.sender_action).toBe('typing_on');
+    expect(body.message).toBeUndefined();
+    expect(body.recipient).toEqual({ id: 'IG_1' });
+  });
+});

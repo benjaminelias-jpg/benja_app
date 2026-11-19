@@ -92,6 +92,12 @@ lead viejo produce un "lead→venta 200%".
 Los DMs se leen y se responden **dentro del CRM**. Entran por el webhook en
 tiempo real, y la primera carga se puede importar con el botón *Sincronizar*.
 
+**Se mandan notas de voz y archivos**, como en ManyChat: elegís el tipo, subís
+el archivo y se envía. El audio se reproduce dentro del hilo, no aparece como
+"(adjunto)". Instagram acepta audio en aac, m4a, wav y mp4 hasta 25 MB; imagen
+en png y jpeg hasta 8 MB; video hasta 25 MB; y como archivo **solo PDF**. El
+formato y el tamaño se validan antes de subir y antes de enviar.
+
 Lo que la hace distinta de un inbox cualquiera:
 
 - **Ventana de 24 h visible.** Meta solo deja escribirle a alguien dentro de las
@@ -135,6 +141,12 @@ dónde sigue.
    [→ Calificado]  [→ Conversando]
 ```
 
+Los pasos disponibles: enviar DM, **audio**, imagen, video o PDF, entregar el
+recurso de la palabra clave, responder el comentario, mostrar "escribiendo…",
+preguntar y esperar (con **botones de respuesta rápida**), condición,
+etiquetar, mover de etapa, escribir campos, asignar responsable, agendar
+reunión, registrar venta, llamar un webhook y avisar al equipo.
+
 Tres cosas que un flujo lineal no puede hacer:
 
 1. **Ramificar.** Un nodo de condición evalúa la respuesta del lead, sus
@@ -144,7 +156,10 @@ Tres cosas que un flujo lineal no puede hacer:
    desde ese punto y guarda su respuesta en un campo del lead. La espera gana
    siempre sobre las palabras clave: si alguien está contestando una pregunta,
    su mensaje no arranca otro flujo porque contenga una keyword.
-3. **Probarse sin molestar a nadie.** El botón *Probar* recorre el flujo en seco
+3. **Preguntar con botones.** Hasta 13, y la respuesta vuelve como un valor
+   exacto en vez de texto libre que haya que interpretar. Las condiciones miran
+   ese valor, así que cambiar el texto de un botón no rompe la lógica.
+4. **Probarse sin molestar a nadie.** El botón *Probar* recorre el flujo en seco
    contra un lead real: muestra cada paso y qué rama tomó, sin mandar un solo
    DM ni mover una etapa.
 
@@ -158,8 +173,20 @@ de ese reel entran sin atribución; la tabla de contenido lo muestra como
 
 ### Conectar Instagram
 
-Desde *Integraciones* → **Conectar Instagram**. Meta tiene hoy dos caminos y cuál
-te toca depende de cómo esté dada de alta tu app:
+Tres pasos en la pantalla de *Integraciones*:
+
+1. Creá una app en Meta (una sola vez) y pegá ahí la URL de redirección que la
+   pantalla te muestra.
+2. Pegá el App ID y el App Secret **en la interfaz**. Se guardan en tu base de
+   datos: no hace falta tocar variables de entorno ni volver a desplegar.
+3. **Conectar Instagram** → iniciás sesión, aceptás los permisos y volvés con la
+   cuenta conectada.
+
+Lo único que Meta no deja saltear es el paso 1: sin una app propia no hay forma
+de pedirle permisos a una cuenta. Es lo mismo que hace ManyChat, con la
+diferencia de que la app es suya y acá es tuya.
+
+Los dos caminos que ofrece Meta:
 
 | | Instagram Login | Unified Login |
 |---|---|---|

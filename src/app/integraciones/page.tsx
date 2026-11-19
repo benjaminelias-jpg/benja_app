@@ -3,8 +3,7 @@ import { getDb } from '@/db/client';
 import { instagramAccounts } from '@/db/schema';
 import { getCurrentOrg } from '@/server/context';
 import { InstagramConnect } from '@/components/instagram-connect';
-import { missingConfig, redirectUri } from '@/server/integrations/instagram-oauth';
-import type { ConnectionMethod } from '@/server/integrations/instagram';
+import { missingConfig, redirectUri, getMetaCredentials } from '@/server/integrations/instagram-oauth';
 import { listEndpoints, listRecentDeliveries } from '@/server/services/webhooks';
 import {
   listSubscriptions,
@@ -32,6 +31,7 @@ export default async function IntegracionesPage({
   const org = await getCurrentOrg();
   const db = await getDb();
 
+  const credentials = await getMetaCredentials(org.id);
   const [endpoints, deliveries, keys, accounts, subscriptions, outbound] = await Promise.all([
     listEndpoints(org.id),
     listRecentDeliveries(20),
@@ -98,8 +98,11 @@ export default async function IntegracionesPage({
                   }
                 : null
             }
-            defaultMethod={env.defaultConnectionMethod}
-            configIssue={missingConfig(env.defaultConnectionMethod as ConnectionMethod)}
+            defaultMethod={credentials.method}
+            configIssue={missingConfig(credentials)}
+            credentialsSource={credentials.source}
+            appId={credentials.appId}
+            redirectUri={redirectUri()}
           />
 
           <div className="mt-4 border-t border-[var(--grid)] pt-3">

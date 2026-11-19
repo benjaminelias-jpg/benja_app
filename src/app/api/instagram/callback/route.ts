@@ -7,6 +7,7 @@ import {
   exchangeCode,
   exchangeForLongLived,
   describeOAuthError,
+  getMetaCredentials,
 } from '@/server/integrations/instagram-oauth';
 import { connectAccount } from '@/server/services/instagram-sync';
 import type { ConnectionMethod } from '@/server/integrations/instagram';
@@ -46,9 +47,10 @@ export async function GET(request: NextRequest) {
   }
   await db.delete(oauthStates).where(eq(oauthStates.state, state));
 
-  const method = (state.split(':')[0] as ConnectionMethod) ?? 'instagram_login';
+  const credentials = await getMetaCredentials(stored.orgId);
+  const method = (state.split(':')[0] as ConnectionMethod) ?? credentials.method;
 
-  const exchanged = await exchangeCode(method, code);
+  const exchanged = await exchangeCode({ ...credentials, method }, code);
   if (!exchanged.ok || !exchanged.accessToken) {
     return back(`No se pudo canjear el codigo: ${exchanged.error}`);
   }
@@ -58,7 +60,7 @@ export async function GET(request: NextRequest) {
 
   // El token de instagram_login dura 1 hora: hay que cambiarlo por el de 60 dias.
   if (method === 'instagram_login') {
-    const longLived = await exchangeForLongLived(token);
+    const longLived = await exchangeForLongLived(token, credentials.appSecret);
     if (longLived.ok && longLived.accessToken) {
       token = longLived.accessToken;
       expiresIn = longLived.expiresInSeconds;

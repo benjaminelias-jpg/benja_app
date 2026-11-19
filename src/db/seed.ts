@@ -278,6 +278,12 @@ async function main() {
       config: {
         text: 'Una pregunta rapida {{nombre}}: ¿ya estas vendiendo tu infoproducto o recien empezas?',
         saveAs: 'facturacion',
+        // Con botones la respuesta vuelve como un valor exacto y la condicion
+        // no tiene que adivinar que quiso decir el lead.
+        quickReplies: [
+          { title: 'Ya facturo', payload: 'ya_facturo' },
+          { title: 'Recien empiezo', payload: 'empezando' },
+        ],
       },
     },
     {

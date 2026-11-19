@@ -29,6 +29,20 @@
       "when": 1795036093539,
       "tag": "0003_outbound_webhooks",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1795078510848,
+      "tag": "0004_media_steps",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1795078796704,
+      "tag": "0005_meta_apps",
+      "breakpoints": true
     }
   ]
 }

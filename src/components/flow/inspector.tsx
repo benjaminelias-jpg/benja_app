@@ -1,5 +1,6 @@
 'use client';
 
+import { useRef, useState } from 'react';
 import { CONDITION_FIELDS, CONDITION_OPS, specFor, type FieldSpec } from './node-catalog';
 import type { AutomationStepType } from '@/db/schema';
 
@@ -118,6 +119,17 @@ export function Inspector({
                 value={config[field.key]}
                 onChange={(value) => set(field.key, value)}
                 placeholder={field.placeholder}
+              />
+            ) : field.type === 'media' ? (
+              <MediaField
+                value={String(config[field.key] ?? '')}
+                mediaType={field.placeholder ?? 'file'}
+                onChange={(value) => set(field.key, value)}
+              />
+            ) : field.type === 'buttons' ? (
+              <ButtonsField
+                value={(config[field.key] as Array<{ title: string; payload: string }>) ?? []}
+                onChange={(value) => set(field.key, value)}
               />
             ) : field.type === 'conditions' ? (
               <ConditionsField
@@ -256,6 +268,155 @@ function ConditionsField({
       >
         + Agregar condición
       </button>
+    </div>
+  );
+}
+
+
+/**
+ * Campo de archivo: se sube y queda la URL pública.
+ * Instagram no recibe bytes, recibe una URL que Meta descarga, así que el
+ * archivo tiene que estar alojado antes de poder mandarse.
+ */
+function MediaField({
+  value,
+  mediaType,
+  onChange,
+}: {
+  value: string;
+  mediaType: string;
+  onChange: (value: string) => void;
+}) {
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const accept: Record<string, string> = {
+    audio: '.aac,.m4a,.wav,.mp4,audio/*',
+    image: '.png,.jpg,.jpeg',
+    video: '.mp4,.ogg,.avi,.mov,.webm,video/*',
+    file: '.pdf',
+  };
+
+  async function upload(file: File) {
+    setError(null);
+    setUploading(true);
+    try {
+      const body = new FormData();
+      body.set('file', file);
+      body.set('type', mediaType);
+      const response = await fetch('/api/uploads', { method: 'POST', body });
+      const json = (await response.json()) as { url?: string; error?: string };
+      if (!response.ok || !json.url) {
+        setError(json.error ?? 'No se pudo subir.');
+        return;
+      }
+      onChange(json.url);
+    } catch (caught) {
+      setError((caught as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  return (
+    <div className="space-y-1.5">
+      <input
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder="https://…  (o subí un archivo)"
+        className="w-full rounded-lg bg-surface-2 px-2.5 py-2 text-xs text-ink hairline placeholder:text-muted"
+      />
+
+      {value && mediaType === 'audio' ? (
+        <audio controls src={value} className="h-8 w-full" />
+      ) : null}
+
+      <input
+        ref={inputRef}
+        type="file"
+        accept={accept[mediaType] ?? ''}
+        className="hidden"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          if (file) void upload(file);
+        }}
+      />
+      <button
+        type="button"
+        disabled={uploading}
+        onClick={() => inputRef.current?.click()}
+        className="w-full rounded-lg border border-dashed border-[var(--axis)] px-2 py-1.5 text-[11px] text-ink-2 hover:text-ink disabled:opacity-50"
+      >
+        {uploading ? 'Subiendo…' : 'Subir archivo'}
+      </button>
+
+      {error ? (
+        <p className="text-[10px]" style={{ color: 'var(--critical)' }}>
+          {error}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/** Botones de respuesta rápida. Instagram permite hasta 13 y corta a 20 caracteres. */
+function ButtonsField({
+  value,
+  onChange,
+}: {
+  value: Array<{ title: string; payload: string }>;
+  onChange: (value: Array<{ title: string; payload: string }>) => void;
+}) {
+  function update(index: number, patch: Partial<{ title: string; payload: string }>) {
+    onChange(value.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+  }
+
+  return (
+    <div className="space-y-2">
+      {value.map((row, index) => (
+        <div key={index} className="rounded-lg bg-surface-2 p-2 hairline">
+          <input
+            value={row.title}
+            maxLength={20}
+            onChange={(event) =>
+              update(index, {
+                title: event.target.value,
+                // El valor sigue al título mientras no se toque a mano: evita
+                // configurar dos campos para el caso simple.
+                payload: row.payload === row.title ? event.target.value : row.payload,
+              })
+            }
+            placeholder="Texto del botón"
+            className="mb-1 w-full rounded-md bg-surface px-2 py-1 text-[11px] text-ink hairline"
+          />
+          <input
+            value={row.payload}
+            onChange={(event) => update(index, { payload: event.target.value })}
+            placeholder="Valor que vuelve (para las condiciones)"
+            className="w-full rounded-md bg-surface px-2 py-1 font-mono text-[10px] text-ink-2 hairline"
+          />
+          <button
+            type="button"
+            onClick={() => onChange(value.filter((_, i) => i !== index))}
+            className="mt-1 text-[10px] text-muted hover:text-ink"
+          >
+            Quitar
+          </button>
+        </div>
+      ))}
+
+      {value.length < 13 ? (
+        <button
+          type="button"
+          onClick={() => onChange([...value, { title: '', payload: '' }])}
+          className="w-full rounded-lg border border-dashed border-[var(--axis)] px-2 py-1.5 text-[11px] text-ink-2 hover:text-ink"
+        >
+          + Agregar botón ({value.length}/13)
+        </button>
+      ) : (
+        <p className="text-[10px] text-muted">Instagram permite 13 botones como máximo.</p>
+      )}
     </div>
   );
 }

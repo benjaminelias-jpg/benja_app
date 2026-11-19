@@ -13,10 +13,13 @@ import {
 import { recordEvent } from './events';
 import {
   sendText,
+  sendMedia,
+  validateMedia,
   messagingWindow,
   dmByteLength,
   MAX_DM_BYTES,
   type IgAuth,
+  type MediaType,
 } from '../integrations/instagram';
 import { authFor } from './automations';
 
@@ -321,6 +324,83 @@ export async function sendReply(params: {
     error: result.error,
     dryRun: result.dryRun,
   };
+}
+
+/**
+ * Manda un adjunto (audio, imagen, video o archivo) desde la bandeja.
+ *
+ * Es lo que hace ManyChat con las notas de voz. Valida la ventana de 24 h y el
+ * formato antes de llamar a Meta, por lo mismo de siempre: un envio rechazado
+ * que quedo guardado parece enviado.
+ */
+export async function sendMediaReply(params: {
+  orgId: string;
+  conversationId: string;
+  type: MediaType;
+  url: string;
+  caption?: string | null;
+}): Promise<SendOutcome> {
+  const db = await getDb();
+
+  const problem = validateMedia(params.type, params.url);
+  if (problem) return { ok: false, error: problem };
+
+  const row = await getConversation(params.orgId, params.conversationId);
+  if (!row) return { ok: false, error: 'No existe esa conversacion.' };
+
+  const window = messagingWindow(row.conversation.lastInboundAt);
+  if (!window.open) return { ok: false, error: window.reason };
+
+  if (!row.lead.igUserId) {
+    return { ok: false, error: 'Este lead no tiene id de Instagram: no se le puede escribir por DM.' };
+  }
+
+  const auth: IgAuth | null = await authFor(params.orgId);
+  if (!auth) return { ok: false, error: 'No hay ninguna cuenta de Instagram conectada.' };
+
+  const result = await sendMedia(auth, {
+    recipientIgId: row.lead.igUserId,
+    type: params.type,
+    url: params.url,
+  });
+
+  const [stored] = await db
+    .insert(messages)
+    .values({
+      orgId: params.orgId,
+      leadId: row.lead.id,
+      conversationId: row.conversation.id,
+      contentId: row.lead.firstTouchContentId,
+      direction: 'outbound',
+      channel: 'ig_dm',
+      body: params.caption ?? null,
+      mediaUrl: params.url,
+      attachments: [{ type: params.type, url: params.url }],
+      status: result.ok ? 'sent' : 'failed',
+      error: result.ok ? null : (result.error ?? null),
+      externalId: result.data?.message_id ?? null,
+    })
+    .returning();
+
+  if (result.ok) {
+    await attachMessageToConversation({
+      orgId: params.orgId,
+      leadId: row.lead.id,
+      direction: 'outbound',
+      preview: `(${params.type})`,
+    });
+    await recordEvent({
+      orgId: params.orgId,
+      leadId: row.lead.id,
+      contentId: row.lead.firstTouchContentId,
+      type: 'dm_sent',
+      channel: 'ig_dm',
+      source: 'inbox',
+      payload: { mediaType: params.type, url: params.url, dryRun: result.dryRun },
+    });
+  }
+
+  return { ok: result.ok, messageId: stored?.id, error: result.error, dryRun: result.dryRun };
 }
 
 /* ------------------------------------------------------------------ *

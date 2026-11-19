@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { and, eq } from 'drizzle-orm';
 import { getDb } from '@/db/client';
-import { webhookEndpoints, webhookSubscriptions } from '@/db/schema';
+import { webhookEndpoints, webhookSubscriptions, metaApps, instagramAccounts } from '@/db/schema';
 import { getCurrentOrg } from '@/server/context';
 import { createApiKey, revokeApiKey } from '@/server/auth/apiKey';
 import { randomToken, slugify } from '@/lib/ids';
@@ -203,4 +203,83 @@ export async function retryDeliveryAction(formData: FormData) {
   if (!deliveryId) return;
   await retryDelivery(deliveryId);
   revalidatePath('/integraciones');
+}
+
+
+/* ------------------------------------------------------------------ *
+ * Credenciales de la app de Meta
+ * ------------------------------------------------------------------ */
+
+export interface CredentialsState {
+  ok?: boolean;
+  error?: string;
+}
+
+/**
+ * Guarda el identificador y la clave de la app de Meta.
+ *
+ * Van a la base y no a variables de entorno para que cambiarlas no exija un
+ * redespliegue: cargarlas una vez y apretar "Conectar" es todo.
+ */
+export async function saveMetaAppAction(
+  _previous: CredentialsState,
+  formData: FormData,
+): Promise<CredentialsState> {
+  const appId = String(formData.get('appId') ?? '').trim();
+  const appSecret = String(formData.get('appSecret') ?? '').trim();
+  const configId = String(formData.get('configId') ?? '').trim();
+  const method = String(formData.get('method') ?? 'instagram_login') as
+    | 'instagram_login'
+    | 'unified_login';
+
+  if (!appId) return { error: 'Falta el identificador de la app.' };
+  if (!/^\d{6,}$/.test(appId)) {
+    return { error: 'El identificador de la app son solo números. Fijate que no hayas pegado otra cosa.' };
+  }
+  if (!appSecret || appSecret.length < 16) {
+    return { error: 'La clave secreta parece incompleta. Copiala entera desde el panel de Meta.' };
+  }
+  if (method === 'unified_login' && !configId) {
+    return { error: 'Para Unified Login hace falta el identificador de la configuración.' };
+  }
+
+  const org = await getCurrentOrg();
+  const db = await getDb();
+
+  const values = {
+    orgId: org.id,
+    method,
+    appId,
+    appSecret,
+    configId: configId || null,
+    updatedAt: new Date(),
+    lastError: null,
+  };
+
+  await db
+    .insert(metaApps)
+    .values(values)
+    .onConflictDoUpdate({ target: metaApps.orgId, set: values });
+
+  revalidatePath('/integraciones');
+  return { ok: true };
+}
+
+export async function forgetMetaAppAction() {
+  const org = await getCurrentOrg();
+  const db = await getDb();
+  await db.delete(metaApps).where(eq(metaApps.orgId, org.id));
+  revalidatePath('/integraciones');
+}
+
+/** Desconecta la cuenta sin borrar nada del CRM. */
+export async function disconnectInstagramAction() {
+  const org = await getCurrentOrg();
+  const db = await getDb();
+  await db
+    .update(instagramAccounts)
+    .set({ connected: false, accessToken: null, tokenExpiresAt: null })
+    .where(eq(instagramAccounts.orgId, org.id));
+  revalidatePath('/integraciones');
+  revalidatePath('/inbox');
 }

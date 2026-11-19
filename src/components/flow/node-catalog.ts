@@ -8,7 +8,16 @@ import type { AutomationStepType } from '@/db/schema';
  * en el motor: no hay formularios escritos a mano por tipo.
  */
 
-export type FieldType = 'text' | 'textarea' | 'number' | 'select' | 'tags' | 'conditions' | 'json';
+export type FieldType =
+  | 'text'
+  | 'textarea'
+  | 'number'
+  | 'select'
+  | 'tags'
+  | 'conditions'
+  | 'json'
+  | 'media'
+  | 'buttons';
 
 export interface FieldSpec {
   key: string;
@@ -91,6 +100,12 @@ export const NODE_SPECS: NodeSpec[] = [
         help: TEXT_HELP,
       },
       {
+        key: 'quickReplies',
+        label: 'Botones de respuesta rápida',
+        type: 'buttons',
+        help: 'Hasta 13. Instagram corta los títulos a 20 caracteres. Sin botones, el lead responde en texto libre.',
+      },
+      {
         key: 'saveAs',
         label: 'Guardar respuesta en el campo',
         type: 'text',
@@ -103,9 +118,53 @@ export const NODE_SPECS: NodeSpec[] = [
     type: 'send_image',
     label: 'Enviar imagen',
     group: 'mensaje',
-    description: 'Manda una imagen por DM (png o jpeg, hasta 8 MB).',
+    description: 'Manda una imagen por DM. png o jpeg, hasta 8 MB.',
     outputs: 'single',
-    fields: [{ key: 'url', label: 'URL de la imagen', type: 'text', placeholder: 'https://…/imagen.jpg' }],
+    fields: [{ key: 'url', label: 'Imagen', type: 'media', placeholder: 'image' }],
+  },
+  {
+    type: 'send_audio',
+    label: 'Enviar audio',
+    group: 'mensaje',
+    description: 'Manda una nota de voz o una pista de audio. aac, m4a, wav o mp4, hasta 25 MB.',
+    outputs: 'single',
+    fields: [{ key: 'url', label: 'Audio', type: 'media', placeholder: 'audio' }],
+  },
+  {
+    type: 'send_video',
+    label: 'Enviar video',
+    group: 'mensaje',
+    description: 'Manda un video por DM. mp4, ogg, avi, mov o webm, hasta 25 MB.',
+    outputs: 'single',
+    fields: [{ key: 'url', label: 'Video', type: 'media', placeholder: 'video' }],
+  },
+  {
+    type: 'send_file',
+    label: 'Enviar PDF',
+    group: 'mensaje',
+    description: 'Manda un archivo por DM. Instagram solo acepta PDF, hasta 25 MB.',
+    outputs: 'single',
+    fields: [{ key: 'url', label: 'Archivo', type: 'media', placeholder: 'file' }],
+  },
+  {
+    type: 'typing',
+    label: 'Mostrar "escribiendo..."',
+    group: 'mensaje',
+    description:
+      'Muestra el indicador de escritura antes del próximo mensaje. Un flujo que responde al instante se nota automático.',
+    outputs: 'single',
+    fields: [
+      {
+        key: 'action',
+        label: 'Acción',
+        type: 'select',
+        options: [
+          { value: 'typing_on', label: 'Empezar a escribir' },
+          { value: 'typing_off', label: 'Dejar de escribir' },
+          { value: 'mark_seen', label: 'Marcar como visto' },
+        ],
+      },
+    ],
   },
   {
     type: 'reply_comment',

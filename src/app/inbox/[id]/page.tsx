@@ -134,6 +134,9 @@ export default async function ThreadPage({ params }: { params: Promise<{ id: str
           status: message.status,
           error: message.error,
           automated: Boolean(message.automatedBy),
+          mediaUrl: message.mediaUrl,
+          mediaType:
+            (message.attachments as Array<{ type?: string }> | null)?.[0]?.type ?? null,
         }))}
       />
 
@@ -143,6 +146,7 @@ export default async function ThreadPage({ params }: { params: Promise<{ id: str
         windowReason={window.reason}
         hasIgId={Boolean(lead.igUserId)}
         simulated={!account?.accessToken}
+        uploadsEnabled={Boolean(process.env.BLOB_READ_WRITE_TOKEN)}
         igThreadId={row.conversation.igThreadId}
         profileUrl={lead.igUsername ? profileLink(lead.igUsername) : null}
         directUrl={row.conversation.igThreadId ? directThreadLink(row.conversation.igThreadId) : null}

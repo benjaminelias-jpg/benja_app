@@ -134,6 +134,11 @@ export async function POST(request: NextRequest) {
           messaging.message?.text ??
           (attachments.length > 0 ? `(${attachments[0]?.type ?? 'adjunto'})` : null);
 
+        // Si toco un boton, `text` trae el titulo visible pero el valor exacto
+        // viene en el payload. Las condiciones del flujo deben mirar el payload:
+        // el titulo se puede cambiar sin romper la logica.
+        const quickReplyPayload = messaging.message?.quick_reply?.payload ?? null;
+
         const result = await ingestInteraction({
           orgId: org.id,
           source: storyId ? 'ig_story_reply' : 'ig_dm',
@@ -142,6 +147,7 @@ export async function POST(request: NextRequest) {
           igMediaId: storyId ?? null,
           messageExternalId: messaging.message?.mid ?? null,
           replyToMid: messaging.message?.reply_to?.mid ?? null,
+          quickReplyPayload,
           occurredAt: messaging.timestamp ? new Date(messaging.timestamp) : undefined,
         });
         results.push({ leadId: result.lead.id, type: storyId ? 'story_reply' : 'dm' });
@@ -246,6 +252,7 @@ interface InstagramWebhookBody {
         text?: string;
         is_echo?: boolean;
         attachments?: Array<{ type?: string; payload?: { url?: string } }>;
+        quick_reply?: { payload?: string };
         reply_to?: { mid?: string; story?: { id?: string; url?: string } };
       };
       read?: { mid?: string };

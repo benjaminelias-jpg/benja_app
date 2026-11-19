@@ -60,6 +60,8 @@ export interface IngestInteractionInput {
   /** Id del hilo de Instagram, si el webhook lo trae. */
   igThreadId?: string | null;
   replyToMid?: string | null;
+  /** Valor del boton de respuesta rapida que toco el lead, si toco uno. */
+  quickReplyPayload?: string | null;
   tags?: string[];
   customFields?: Record<string, unknown>;
   occurredAt?: Date;
@@ -202,7 +204,9 @@ export async function ingestInteraction(input: IngestInteractionInput): Promise<
   if (input.text && isConversationalSource(input.source)) {
     const wait = await pendingWaitForLead(lead.id);
     if (wait) {
-      const result = await resumeAutomation(wait.id, input.text, lead);
+      // El payload del boton gana sobre el texto: es el valor exacto que el
+      // flujo configuro, y no cambia aunque se reescriba el titulo del boton.
+      const result = await resumeAutomation(wait.id, input.quickReplyPayload ?? input.text, lead);
       automationRunId = result?.runId ?? null;
       resumed = true;
     }

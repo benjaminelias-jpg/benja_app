@@ -28,6 +28,51 @@ export const UNIFIED_LOGIN_SCOPES = [
   'instagram_manage_insights',
 ];
 
+/**
+ * Credenciales efectivas de la app de Meta.
+ *
+ * Primero la base (configurables desde la interfaz, sin redesplegar), y si no
+ * hay nada ahi, las variables de entorno. Asi funciona tanto el camino facil
+ * como el de quien prefiere configurarlo por entorno.
+ */
+export interface MetaCredentials {
+  method: ConnectionMethod;
+  appId: string;
+  appSecret: string;
+  configId?: string | null;
+  /** De donde salieron, para poder explicarlo en pantalla. */
+  source: 'base' | 'entorno' | 'ninguna';
+}
+
+export async function getMetaCredentials(orgId: string): Promise<MetaCredentials> {
+  const { getDb } = await import('@/db/client');
+  const { metaApps } = await import('@/db/schema');
+  const { eq } = await import('drizzle-orm');
+
+  const db = await getDb();
+  const [stored] = await db.select().from(metaApps).where(eq(metaApps.orgId, orgId)).limit(1);
+
+  if (stored?.appId && stored?.appSecret) {
+    return {
+      method: stored.method,
+      appId: stored.appId,
+      appSecret: stored.appSecret,
+      configId: stored.configId,
+      source: 'base',
+    };
+  }
+
+  const method = env.defaultConnectionMethod;
+  const appId = method === 'unified_login' ? env.metaAppId : env.instagramAppId;
+  const appSecret = method === 'unified_login' ? env.metaAppSecret : env.instagramAppSecret;
+
+  if (appId && appSecret) {
+    return { method, appId, appSecret, configId: env.metaConfigId, source: 'entorno' };
+  }
+
+  return { method, appId: '', appSecret: '', source: 'ninguna' };
+}
+
 export interface OAuthTokenResult {
   ok: boolean;
   accessToken?: string;
@@ -43,30 +88,24 @@ export function redirectUri(): string {
 }
 
 /** Si falta configuracion, la UI lo dice en vez de mandar al usuario a un 400 de Meta. */
-export function missingConfig(method: ConnectionMethod): string | null {
-  if (method === 'instagram_login') {
-    if (!env.instagramAppId) return 'Falta INSTAGRAM_APP_ID';
-    if (!env.instagramAppSecret) return 'Falta INSTAGRAM_APP_SECRET';
-    return null;
+export function missingConfig(credentials: MetaCredentials): string | null {
+  if (!credentials.appId) return 'Falta el identificador de la app de Meta.';
+  if (!credentials.appSecret) return 'Falta la clave secreta de la app de Meta.';
+  if (credentials.method === 'unified_login' && !credentials.configId) {
+    return 'Falta el identificador de la configuración de Facebook Login.';
   }
-  if (method === 'unified_login') {
-    if (!env.metaAppId) return 'Falta META_APP_ID';
-    if (!env.metaAppSecret) return 'Falta META_APP_SECRET';
-    if (!env.metaConfigId) return 'Falta META_CONFIG_ID';
-    return null;
-  }
-  return 'Conexion manual: no usa OAuth';
+  return null;
 }
 
 /* ------------------------------------------------------------------ *
  * Paso 1: mandar al usuario a autorizar
  * ------------------------------------------------------------------ */
 
-export function buildAuthUrl(method: ConnectionMethod, state: string): string {
-  if (method === 'unified_login') {
+export function buildAuthUrl(credentials: MetaCredentials, state: string): string {
+  if (credentials.method === 'unified_login') {
     const url = new URL('https://www.facebook.com/dialog/oauth');
-    url.searchParams.set('client_id', env.metaAppId ?? '');
-    url.searchParams.set('config_id', env.metaConfigId ?? '');
+    url.searchParams.set('client_id', credentials.appId);
+    url.searchParams.set('config_id', credentials.configId ?? '');
     url.searchParams.set('redirect_uri', redirectUri());
     url.searchParams.set('response_type', 'code');
     url.searchParams.set('display', 'popup');
@@ -75,7 +114,7 @@ export function buildAuthUrl(method: ConnectionMethod, state: string): string {
   }
 
   const url = new URL('https://www.instagram.com/oauth/authorize');
-  url.searchParams.set('client_id', env.instagramAppId ?? '');
+  url.searchParams.set('client_id', credentials.appId);
   url.searchParams.set('redirect_uri', redirectUri());
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('scope', INSTAGRAM_LOGIN_SCOPES.join(','));
@@ -88,16 +127,17 @@ export function buildAuthUrl(method: ConnectionMethod, state: string): string {
  * ------------------------------------------------------------------ */
 
 export async function exchangeCode(
-  method: ConnectionMethod,
+  credentials: MetaCredentials,
   code: string,
 ): Promise<OAuthTokenResult> {
+  const method = credentials.method;
   // Meta devuelve el codigo con un "#_" pegado al final que hay que sacar.
   const cleanCode = code.replace(/#_$/, '');
 
   if (method === 'unified_login') {
     const url = new URL(`https://graph.facebook.com/${GRAPH_VERSION}/oauth/access_token`);
-    url.searchParams.set('client_id', env.metaAppId ?? '');
-    url.searchParams.set('client_secret', env.metaAppSecret ?? '');
+    url.searchParams.set('client_id', credentials.appId);
+    url.searchParams.set('client_secret', credentials.appSecret);
     url.searchParams.set('redirect_uri', redirectUri());
     url.searchParams.set('code', cleanCode);
 
@@ -124,8 +164,8 @@ export async function exchangeCode(
 
   // instagram_login: el canje va por POST con el cuerpo en form-data.
   const body = new URLSearchParams({
-    client_id: env.instagramAppId ?? '',
-    client_secret: env.instagramAppSecret ?? '',
+    client_id: credentials.appId,
+    client_secret: credentials.appSecret,
     grant_type: 'authorization_code',
     redirect_uri: redirectUri(),
     code: cleanCode,
@@ -172,10 +212,13 @@ export async function exchangeCode(
  * ------------------------------------------------------------------ */
 
 /** Canjea el token de 1 hora por uno de 60 dias. Debe hacerse en el servidor. */
-export async function exchangeForLongLived(shortToken: string): Promise<OAuthTokenResult> {
+export async function exchangeForLongLived(
+  shortToken: string,
+  appSecret: string,
+): Promise<OAuthTokenResult> {
   const url = new URL('https://graph.instagram.com/access_token');
   url.searchParams.set('grant_type', 'ig_exchange_token');
-  url.searchParams.set('client_secret', env.instagramAppSecret ?? '');
+  url.searchParams.set('client_secret', appSecret);
   url.searchParams.set('access_token', shortToken);
 
   try {
